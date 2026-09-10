@@ -119,6 +119,28 @@ function setupSmallInteractions() {
     sentConfirm.addEventListener('click', () => { sentConfirm.hidden = true; document.querySelector('[data-waiting-copy]').hidden = false; });
   }
 }
+function setupKakaoLogin() {
+  const button = document.querySelector('[data-kakao-login]');
+  if (!button || !window.giftoDb) return;
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    button.textContent = '카카오로 이동 중…';
+    const message = document.querySelector('[data-auth-message]');
+    const redirectTo = new URL('my-page.html', location.href).href;
+    const { error } = await window.giftoDb.auth.signInWithOAuth({
+      provider: 'kakao',
+      options: {
+        redirectTo,
+        scopes: 'profile_nickname profile_image'
+      }
+    });
+    if (error) {
+      button.disabled = false;
+      button.textContent = '카카오로 시작하기';
+      message.textContent = '로그인을 시작하지 못했어요. 카카오 설정을 다시 확인해 주세요.';
+    }
+  });
+}
 function showTransferGuide(type, value) {
   const methods = document.querySelector('[data-transfer-methods]');
   let guide = methods.querySelector('[data-transfer-guide]');
@@ -260,4 +282,4 @@ async function getProductImage(url) {
     return documentFragment.querySelector('meta[property="og:image"]')?.content || '';
   } catch { return ''; }
 }
-setupFriendList(); setupPublicProfile(); renderProducts(); setupWishlistEditing(); setupParticipants(); setupContribution(); setupSmallInteractions(); setupPaymentSettings(); setupCreateWishlist();
+setupFriendList(); setupPublicProfile(); renderProducts(); setupWishlistEditing(); setupParticipants(); setupContribution(); setupSmallInteractions(); setupPaymentSettings(); setupCreateWishlist(); setupKakaoLogin();
