@@ -111,8 +111,11 @@ function setupSmallInteractions() {
   if (sentConfirm) {
     const params = new URLSearchParams(location.search); const amount = Number(params.get('amount')) || 0;
     const methodNames = { kakao: '카카오페이', toss: '토스', naver: 'Npay' };
+    document.querySelector('[data-complete-title]').innerHTML = activeProfile.name + '에게<br />송금했나요?';
+    document.querySelector('.complete-card > p:not(.eyebrow)').innerHTML = '송금이 끝났다면 아래 버튼을 눌러주세요.<br />' + activeProfile.name + '이 입금을 확인하면 진행률에 반영돼요.';
     document.querySelector('[data-complete-amount]').textContent = won(amount);
     document.querySelector('[data-complete-method]').textContent = methodNames[params.get('method')] || '송금 수단';
+    document.querySelector('.transfer-status small').textContent = activeProfile.name + '의 입금 확인 전';
     sentConfirm.addEventListener('click', () => { sentConfirm.hidden = true; document.querySelector('[data-waiting-copy]').hidden = false; });
   }
 }
