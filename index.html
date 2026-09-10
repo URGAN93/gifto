@@ -11,28 +11,27 @@
   <main class="app-shell home">
     <header class="topbar">
       <a class="brand" href="index.html" aria-label="GIFTO 홈"><span class="brand-mark">G</span> GIFTO</a>
-      <a class="icon-button" href="pages/login.html" aria-label="내 페이지">☺</a>
+      <a class="icon-button" href="pages/login.html" data-auth-destination="pages/my-page.html" aria-label="내 페이지">☺</a>
     </header>
 
     <section class="hero">
       <p class="eyebrow">마음을 모아, 더 특별하게</p>
       <h1>함께하는<br />위시리스트</h1>
       <p class="hero-copy">내가 원하는 것을 자연스럽게 공유하세요.<br />소중한 사람들이 마음을 더할 수 있어요.</p>
+      <section class="home-wishlist-status" data-home-wishlist-status hidden></section>
       <div class="hero-visual" aria-hidden="true"><span>🎁</span><i></i><b>♥</b></div>
-      <a class="button button-primary button-large" href="pages/create.html">내 위시리스트 만들기 <span>→</span></a>
+      <a class="button button-primary button-large" href="pages/login.html" data-auth-destination="pages/create.html">내 위시리스트 만들기 <span>→</span></a>
     </section>
 
     <section class="section" id="friend-wishlists">
       <div class="section-heading"><div><p class="eyebrow">다가오는 이벤트</p><h2>친구 위시리스트</h2></div><span class="subtle">가까운 순</span></div>
       <div class="birthday-list" data-friend-list>
-        <a class="birthday-card" href="pages/wishlist.html?owner=jiyoon"><div class="avatar avatar-peach">J</div><div><strong>지윤</strong><span>D-4 · 9월 14일</span></div><em>🎈</em></a>
-        <a class="birthday-card" href="pages/wishlist.html?owner=minji"><div class="avatar avatar-lilac">M</div><div><strong>민지</strong><span>D-6 · 9월 16일</span></div><em>✨</em></a>
-        <a class="birthday-card" href="pages/my-page.html"><div class="avatar avatar-blue">S</div><div><strong>심성민 (나)</strong><span>내 위시리스트 관리하기</span></div><em>🎂</em></a>
+        <div class="empty-state">아직 공개된 친구 위시리스트가 없어요.</div>
       </div>
     </section>
   </main>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="js/supabase.js"></script>
-  <script src="js/app.js?v=20260911"></script>
+  <script src="js/supabase.js?v=20260913"></script>
+  <script src="js/app.js?v=20260935"></script>
 </body>
 </html>

@@ -1,0 +1,7 @@
+[functions.product-preview]
+# The handler validates the user token via Supabase Auth (supports new signing keys).
+verify_jwt = false
+
+[functions.remove-background]
+# The handler validates the user token via Supabase Auth (supports new signing keys).
+verify_jwt = false
