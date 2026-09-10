@@ -210,6 +210,7 @@ function setupPublicProfile() {
 function setupFriendList() {
   const list = document.querySelector('[data-friend-list]');
   if (!list) return;
+  list.innerHTML = '';
   Object.entries(sharedProfiles)
     .sort(([, first], [, second]) => Number(first.countdown.slice(2)) - Number(second.countdown.slice(2)))
     .forEach(([id, profile]) => {
