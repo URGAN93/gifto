@@ -63,6 +63,7 @@ function setupContribution() {
   let availableTransfers = 0;
   transferButtons.forEach(button => {
     const type = button.dataset.transfer;
+    if (type !== 'kakao') { button.hidden = true; return; }
     const transferValue = type === 'kakao' ? paymentInfo.kakaoQr : paymentInfo[type + 'Info'];
     button.hidden = !transferValue; if (transferValue) availableTransfers += 1;
     button.querySelector('small').textContent = '송금 정보 보기';
@@ -138,21 +139,21 @@ function setupPaymentSettings() {
   const info = getPaymentInfo();
   const kakao = document.querySelector('#payment-kakao'); const toss = document.querySelector('#payment-toss'); const naver = document.querySelector('#payment-naver');
   form.closest('.payment-settings').querySelector('h2').textContent = '송금 정보 설정';
-  form.closest('.payment-settings').querySelector('.settings-copy').textContent = '카카오페이는 QR 코드로, 토스와 네이버페이는 송금 정보를 등록해 주세요.';
+  form.closest('.payment-settings').querySelector('.settings-copy').textContent = '카카오페이 코드송금 QR을 등록해 주세요.';
   kakao.type = 'file'; kakao.accept = 'image/*'; kakao.value = '';
-  toss.type = 'text'; toss.placeholder = '예: 심성민 · 010-1234-5678 또는 계좌번호';
-  naver.type = 'text'; naver.placeholder = '예: 심성민 · 010-1234-5678';
+  toss.hidden = true; naver.hidden = true;
+  toss.previousElementSibling.hidden = true; naver.previousElementSibling.hidden = true;
   kakao.previousElementSibling.textContent = '카카오페이 송금 QR';
   toss.previousElementSibling.textContent = '토스 송금 정보';
   naver.previousElementSibling.textContent = '네이버페이 송금 정보';
-  const help = document.createElement('p'); help.className = 'field-help'; help.textContent = '카카오페이에서 코드송금 QR을 저장해 올려 주세요. 토스와 네이버페이는 친구가 송금할 때 찾을 연락처 또는 계좌 정보를 적어 주세요.';
+  const help = document.createElement('p'); help.className = 'field-help'; help.textContent = '카카오톡에서 만든 코드송금 QR을 저장해 올려 주세요.';
   kakao.insertAdjacentElement('afterend', help);
   const preview = document.createElement('img'); preview.className = 'payment-qr-preview'; preview.alt = '등록한 카카오페이 송금 QR';
   if (info.kakaoQr) { preview.src = info.kakaoQr; kakao.insertAdjacentElement('afterend', preview); }
   toss.value = info.tossInfo || ''; naver.value = info.naverInfo || '';
   form.addEventListener('submit', event => {
     event.preventDefault();
-    const save = qr => { savePaymentInfo({ kakaoQr: qr || info.kakaoQr || '', tossInfo: toss.value.trim(), naverInfo: naver.value.trim() }); showToast('송금 정보를 저장했어요.'); };
+    const save = qr => { savePaymentInfo({ kakaoQr: qr || info.kakaoQr || '' }); showToast('카카오페이 QR을 저장했어요.'); };
     const file = kakao.files[0];
     if (!file) { save(''); return; }
     const reader = new FileReader(); reader.onload = () => save(reader.result); reader.readAsDataURL(file);
