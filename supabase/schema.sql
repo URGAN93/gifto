@@ -14,6 +14,7 @@ create table public.wishlists (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid not null references public.profiles(id) on delete cascade,
   title text not null default '나의 위시리스트',
+  note text,
   share_slug text not null unique default encode(gen_random_bytes(9), 'hex'),
   is_public boolean not null default true,
   created_at timestamptz not null default now()

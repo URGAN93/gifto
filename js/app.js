@@ -31,17 +31,30 @@ async function loadRemoteWishlist(owner) {
   if (remoteWishlistCache.has(owner)) return remoteWishlistCache.get(owner);
   const {data: profile, error: profileError} = await window.giftoDb.from('profiles').select('id,display_name,avatar_url').eq('id', owner).single();
   if (profileError || !profile) throw new Error('PROFILE_NOT_FOUND');
-  const {data: wishlist, error: wishlistError} = await window.giftoDb.from('wishlists').select('id,title').eq('owner_id', owner).eq('is_public', true).order('created_at', {ascending:false}).limit(1).maybeSingle();
+  const {data: wishlist, error: wishlistError} = await window.giftoDb.from('wishlists').select('id,title,note').eq('owner_id', owner).eq('is_public', true).order('created_at', {ascending:false}).limit(1).maybeSingle();
   if (wishlistError || !wishlist) throw new Error('WISHLIST_NOT_FOUND');
   const {data: rows, error: itemError} = await window.giftoDb.from('wishlist_items').select('id,name,price,product_url,image_url,emoji,color,position,contributions(id,contributor_name,amount,status,created_at)').eq('wishlist_id', wishlist.id).order('position');
   if (itemError) throw itemError;
   const products = (rows || []).map(row => {
     const confirmed = (row.contributions || []).filter(contribution => contribution.status === 'confirmed');
-    return {id:row.id, dbId:row.id, name:row.name, price:row.price, productUrl:row.product_url || '', imageUrl:row.image_url || '', emoji:row.emoji, color:row.color, raised:confirmed.reduce((sum, contribution) => sum + contribution.amount, 0), supporters:confirmed.length, contributors:confirmed};
+    return {id:row.id, dbId:row.id, name:row.name, price:row.price, productUrl:row.product_url || '', imageUrl:row.image_url || '', emoji:row.emoji, color:row.color, raised:confirmed.reduce((sum, contribution) => sum + contribution.amount, 0), supporters:confirmed.length, contributors:confirmed, hasContributions:(row.contributions || []).length > 0};
   });
   const loaded = {profile, wishlist, products}; remoteWishlistCache.set(owner, loaded); return loaded;
 }
 function clearRemoteWishlist(owner) { remoteWishlistCache.delete(owner); }
+async function getOrCreateOwnWishlist(user, details = {}) {
+  const {data: existing, error: readError} = await window.giftoDb.from('wishlists').select('id,title,note').eq('owner_id', user.id).order('created_at', {ascending:false}).limit(1).maybeSingle();
+  if (readError) throw readError;
+  const title = details.title || existing?.title || (user.user_metadata?.name || user.user_metadata?.nickname || '나') + '의 생일 선물';
+  if (existing) {
+    const {data, error} = await window.giftoDb.from('wishlists').update({title, note:details.note ?? existing.note ?? null, is_public:true}).eq('id', existing.id).select('id,title,note').single();
+    if (error) throw error;
+    return data;
+  }
+  const {data, error} = await window.giftoDb.from('wishlists').insert({owner_id:user.id, title, note:details.note || null, is_public:true}).select('id,title,note').single();
+  if (error) throw error;
+  return data;
+}
 
 function renderProducts() {
   document.querySelectorAll('[data-my-product-count]').forEach(count => { count.textContent = appData.products.length; });
@@ -177,17 +190,9 @@ function isKakaoPayLink(value) {
   catch { return false; }
 }
 async function ensureCloudShare(user) {
-  const {data: existing, error: existingError} = await window.giftoDb.from('wishlists').select('id').eq('owner_id', user.id).eq('is_public', true).order('created_at', {ascending:false}).limit(1).maybeSingle();
-  if (existingError) throw existingError;
-  let wishlist = existing;
-  if (!wishlist) {
-    let details = {};
-    try { details = JSON.parse(localStorage.getItem('gifto-wishlist-details:' + user.id)) || {}; } catch {}
-    const nickname = user.user_metadata?.full_name || user.user_metadata?.name || user.user_metadata?.nickname || '나';
-    const {data, error} = await window.giftoDb.from('wishlists').insert({owner_id:user.id, title:details.title || nickname + '의 생일 선물', is_public:true}).select('id').single();
-    if (error) throw error;
-    wishlist = data;
-  }
+  let details = {};
+  try { details = JSON.parse(localStorage.getItem('gifto-wishlist-details:' + user.id)) || {}; } catch {}
+  const wishlist = await getOrCreateOwnWishlist(user, details);
   const {data: storedItems, error: itemsError} = await window.giftoDb.from('wishlist_items').select('id').eq('wishlist_id', wishlist.id).limit(1);
   if (itemsError) throw itemsError;
   if (!(storedItems || []).length && appData.products.length) {
@@ -340,9 +345,22 @@ function setupWishlistEditing() {
       const action = card.querySelector('.card-button');
       if (action) { action.href = 'participants.html?product=' + encodeURIComponent(product.id); action.textContent = '참여 보기'; }
       const remoteAction = document.createElement('div'); remoteAction.className = 'product-actions';
-      const state = document.createElement('button'); state.type = 'button'; state.className = 'product-delete is-locked';
-      state.textContent = product.raised > 0 || product.supporters > 0 ? '진행 중' : '공개됨'; state.disabled = true;
-      remoteAction.append(state); card.append(remoteAction);
+      if (product.hasContributions || product.raised > 0 || product.supporters > 0) {
+        const state = document.createElement('button'); state.type = 'button'; state.className = 'product-delete is-locked';
+        state.textContent = '진행 중'; state.disabled = true; remoteAction.append(state);
+      } else {
+        const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'product-edit'; edit.textContent = '수정'; edit.addEventListener('click', () => openProductEditor(product));
+        const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'product-delete'; remove.textContent = '삭제';
+        remove.addEventListener('click', async () => {
+          if (!confirm(product.name + '을(를) 위시리스트에서 삭제할까요?')) return;
+          remove.disabled = true;
+          const {error} = await window.giftoDb.from('wishlist_items').delete().eq('id', product.dbId);
+          if (error) { remove.disabled = false; showToast('상품을 삭제하지 못했어요.'); return; }
+          await hydrateMyRemoteWishlist(); showToast('상품을 삭제했어요.');
+        });
+        remoteAction.append(edit, remove);
+      }
+      card.append(remoteAction);
       return;
     }
     const actions = document.createElement('div'); actions.className = 'product-actions';
@@ -420,14 +438,21 @@ function openProductEditor(product) {
       } catch (error) { showToast(error.message || '배경을 지우지 못했어요.'); removeButton.disabled = false; removeButton.textContent = '배경 제거 미리보기'; }
     });
   }
-  layer.querySelector('[data-save-product]').addEventListener('click', () => {
+  layer.querySelector('[data-save-product]').addEventListener('click', async () => {
     const name = layer.querySelector('#edit-product-name').value.trim();
     const price = Number(layer.querySelector('#edit-product-price').value);
     const url = layer.querySelector('#edit-product-url').value.trim();
     if (!name || !Number.isFinite(price) || price <= 0) { showToast('상품 이름과 0원보다 큰 가격을 입력해 주세요.'); return; }
     if (url) { try { const parsed = new URL(url); if (parsed.protocol !== 'https:') throw new Error(); } catch { showToast('상품 링크는 https:// 주소로 넣어 주세요.'); return; } }
     product.name = name; product.price = price; product.productUrl = url; product.imageUrl = pendingImage;
-    try { saveProducts(appData.products); renderProducts(); setupWishlistEditing(); close(); showToast('상품 정보를 수정했어요.'); }
+    try {
+      if (product.dbId) {
+        const {error} = await window.giftoDb.from('wishlist_items').update({name, price, product_url:url || null, image_url:pendingImage || null}).eq('id', product.dbId);
+        if (error) throw error;
+        await hydrateMyRemoteWishlist();
+      } else { saveProducts(appData.products); renderProducts(); setupWishlistEditing(); }
+      close(); showToast('상품 정보를 수정했어요.');
+    }
     catch { showToast('저장하지 못했어요. 브라우저 저장공간을 확인해 주세요.'); }
   });
   document.body.append(layer);
@@ -545,7 +570,7 @@ async function setupPublicProfile() {
     } else if (isMine && isUuid(ownerId)) {
       const remote = await loadRemoteWishlist(ownerId);
       profile = remote.profile;
-      details = {title:remote.wishlist.title};
+      details = {title:remote.wishlist.title, note:remote.wishlist.note};
       activeProfile.products = remote.products;
       ownerView = true;
     } else if (isMine) {
@@ -557,7 +582,7 @@ async function setupPublicProfile() {
     } else {
       const remote = await loadRemoteWishlist(ownerId);
       profile = remote.profile;
-      details = {title:remote.wishlist.title};
+      details = {title:remote.wishlist.title, note:remote.wishlist.note};
       activeProfile.products = remote.products;
     }
     const name = profile.display_name || 'GIFTO 사용자';
@@ -675,6 +700,19 @@ function setupCreateWishlist() {
   const draftList = document.querySelector('[data-draft-products]');
   const showDrafts = () => { draftList.innerHTML = appData.products.map(item => `<div class="draft-product">${item.imageUrl ? `<img width="48" height="48" style="object-fit:contain" src="${escapeHtml(item.imageUrl)}" alt="${escapeHtml(item.name)}" />` : `<span>${escapeHtml(item.emoji)}</span>`}<strong>${escapeHtml(item.name)}</strong><small>${won(item.price)}</small></div>`).join(''); };
   showDrafts();
+  (async () => {
+    const {data: auth} = await window.giftoDb.auth.getSession();
+    if (!auth.session) return;
+    try {
+      const remote = await loadRemoteWishlist(auth.session.user.id);
+      appData.products = remote.products;
+      document.querySelector('#list-title').value = remote.wishlist.title || document.querySelector('#list-title').value;
+      if (remote.wishlist.note) document.querySelector('#list-note').value = remote.wishlist.note;
+      showDrafts();
+    } catch {
+      // First wishlist: keep locally prepared draft products until the first save.
+    }
+  })();
   document.querySelectorAll('[data-emoji]').forEach(button => button.addEventListener('click', () => {
     document.querySelectorAll('[data-emoji]').forEach(item => item.classList.remove('selected'));
     button.classList.add('selected'); selectedEmoji = button.dataset.emoji;
@@ -695,9 +733,22 @@ function setupCreateWishlist() {
     try {
       const {data, error} = await window.giftoDb.auth.getSession();
       if (error || !data.session) { location.href = 'login.html'; return; }
+      const saveButton = event.currentTarget; saveButton.classList.add('is-disabled'); saveButton.textContent = '저장 중…';
+      const details = {title:document.querySelector('#list-title').value.trim(), note:document.querySelector('#list-note').value.trim()};
+      const wishlist = await getOrCreateOwnWishlist(data.session.user, details);
+      const drafts = appData.products.filter(product => !product.dbId);
+      if (drafts.length) {
+        const {data: added, error: itemError} = await window.giftoDb.from('wishlist_items').insert(drafts.map((product, position) => ({
+          wishlist_id:wishlist.id, name:product.name, price:product.price, product_url:product.productUrl || null,
+          image_url:product.imageUrl || null, emoji:product.emoji || '🎁', color:product.color || '#f2f7ff', position
+        }))).select('id,name,price,product_url,image_url,emoji,color,position');
+        if (itemError) throw itemError;
+        appData.products = appData.products.filter(product => product.dbId).concat((added || []).map(product => ({...product, dbId:product.id, raised:0, supporters:0, contributors:[]})));
+      }
       saveProducts(appData.products);
-      localStorage.setItem('gifto-wishlist-details:' + data.session.user.id, JSON.stringify({title:document.querySelector('#list-title').value.trim(), note:document.querySelector('#list-note').value.trim()}));
-      location.href = 'wishlist.html';
+      localStorage.setItem('gifto-wishlist-details:' + data.session.user.id, JSON.stringify(details));
+      clearRemoteWishlist(data.session.user.id);
+      location.href = `wishlist.html?owner=${encodeURIComponent(data.session.user.id)}`;
     } catch { showToast('저장하지 못했어요. 저장공간과 연결 상태를 확인해 주세요.'); }
   });
 }
