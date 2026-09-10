@@ -67,8 +67,22 @@ function renderProducts() {
 async function setupHomeWishlistStatus() {
   const status = document.querySelector('[data-home-wishlist-status]');
   if (!status || !window.giftoDb) return;
+  const primaryAction = document.querySelector('[data-home-primary-action]');
+  const revealPrimaryAction = () => { if (primaryAction) primaryAction.style.visibility = 'visible'; };
   const {data: auth} = await window.giftoDb.auth.getSession();
-  if (!auth.session) return;
+  if (!auth.session) { revealPrimaryAction(); return; }
+  const cacheKey = 'gifto-home-wishlist-status';
+  const reveal = async product => {
+    const percent = product.price ? Math.round((product.raised || 0) / product.price * 100) : 0;
+    status.hidden = true;
+    status.innerHTML = `<a href="pages/my-page.html" class="home-wishlist-card"><div class="home-wishlist-image" style="--image-bg:${escapeHtml(product.color || '#f2f7ff')}">${escapeHtml(product.emoji || '🎁')}${product.imageUrl ? `<img src="${escapeHtml(product.imageUrl)}" alt="${escapeHtml(product.name)}" />` : ''}</div><div><p>나의 위시리스트 현황</p><strong>${escapeHtml(product.name)}</strong><span>${won(product.raised || 0)} 모임 · ${percent}% · ${product.supporters || 0}명 참여</span></div><b>›</b></a>`;
+    const image = status.querySelector('img');
+    if (image && !image.complete) await Promise.race([new Promise(resolve => { image.onload = resolve; image.onerror = resolve; }), new Promise(resolve => setTimeout(resolve, 700))]);
+    status.hidden = false;
+  };
+  let cached;
+  try { cached = JSON.parse(localStorage.getItem(cacheKey) || 'null'); } catch {}
+  if (cached?.ownerId === auth.session.user.id && cached.product) await reveal(cached.product);
   let products = [];
   try {
     const remote = await loadRemoteWishlist(auth.session.user.id);
@@ -76,13 +90,14 @@ async function setupHomeWishlistStatus() {
   } catch {
     products = appData.products;
   }
-  if (!products.length) return;
+  if (!products.length) { revealPrimaryAction(); return; }
   const product = products[0];
-  const percent = product.price ? Math.round((product.raised || 0) / product.price * 100) : 0;
-  status.hidden = false;
-  status.innerHTML = `<a href="pages/my-page.html" class="home-wishlist-card"><div class="home-wishlist-image" style="--image-bg:${escapeHtml(product.color || '#f2f7ff')}">${escapeHtml(product.emoji || '🎁')}${product.imageUrl ? `<img src="${escapeHtml(product.imageUrl)}" alt="${escapeHtml(product.name)}" />` : ''}</div><div><p>나의 위시리스트 현황</p><strong>${escapeHtml(product.name)}</strong><span>${won(product.raised || 0)} 모임 · ${percent}% · ${product.supporters || 0}명 참여</span></div><b>›</b></a>`;
+  const nextSnapshot = JSON.stringify(product);
+  if (JSON.stringify(cached?.product) !== nextSnapshot) await reveal(product);
+  try { localStorage.setItem(cacheKey, JSON.stringify({ownerId:auth.session.user.id, product})); } catch {}
   const create = document.querySelector('[data-auth-destination="pages/create.html"]');
   if (create) { create.href = 'pages/my-page.html'; create.childNodes[0].nodeValue = '내 위시리스트 관리 '; }
+  revealPrimaryAction();
 }
 
 async function setupContribution() {
@@ -279,6 +294,37 @@ function setupPaymentSettings() {
     const file = kakao.files[0];
     if (!file) { save(''); return; }
     const reader = new FileReader(); reader.onload = () => save(reader.result); reader.readAsDataURL(file);
+  });
+}
+async function setupBirthdaySettings() {
+  const form = document.querySelector('[data-birthday-form]');
+  if (!form || !window.giftoDb) return;
+  const month = document.querySelector('#birthday-month');
+  const day = document.querySelector('#birthday-day');
+  const locked = document.querySelector('[data-birthday-locked]');
+  month.innerHTML = '<option value="">월</option>' + Array.from({length:12}, (_, index) => `<option value="${index + 1}">${index + 1}</option>`).join('');
+  const setDays = () => {
+    const max = month.value ? new Date(2000, Number(month.value), 0).getDate() : 0;
+    day.disabled = !max;
+    day.innerHTML = '<option value="">일</option>' + Array.from({length:max}, (_, index) => `<option value="${index + 1}">${index + 1}</option>`).join('');
+  };
+  month.addEventListener('change', setDays);
+  const {data: auth} = await window.giftoDb.auth.getSession();
+  if (!auth.session) { form.hidden = true; return; }
+  const {data: profile} = await window.giftoDb.from('profiles').select('birth_date').eq('id', auth.session.user.id).single();
+  if (profile?.birth_date) {
+    const [, savedMonth, savedDay] = profile.birth_date.split('-');
+    form.hidden = true; locked.hidden = false; locked.textContent = `${Number(savedMonth)}월 ${Number(savedDay)}일 · 한 번 저장한 생일은 바꿀 수 없어요.`;
+    return;
+  }
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!month.value || !day.value) { showToast('생일 월과 일을 골라 주세요.'); return; }
+    const button = form.querySelector('button'); button.disabled = true; button.textContent = '저장 중…';
+    const birthDate = `2000-${String(month.value).padStart(2, '0')}-${String(day.value).padStart(2, '0')}`;
+    const {error} = await window.giftoDb.from('profiles').update({birth_date:birthDate}).eq('id', auth.session.user.id).is('birth_date', null);
+    if (error) { button.disabled = false; button.textContent = '생일 저장'; showToast('생일을 저장하지 못했어요.'); return; }
+    form.hidden = true; locked.hidden = false; locked.textContent = `${Number(month.value)}월 ${Number(day.value)}일 · 한 번 저장한 생일은 바꿀 수 없어요.`; showToast('생일을 저장했어요.');
   });
 }
 function showToast(message) {
@@ -690,7 +736,7 @@ async function getProductPreview(url) {
   }
   return data || {};
 }
-setupFriendList(); setupPublicProfile(); renderProducts(); setupWishlistEditing(); setupParticipants(); setupContribution(); setupSmallInteractions(); setupPaymentSettings(); setupPendingConfirmations(); setupCreateWishlist(); setupKakaoLogin(); hydrateMyRemoteWishlist(); setupHomeWishlistStatus();
+setupFriendList(); setupPublicProfile(); renderProducts(); setupWishlistEditing(); setupContribution(); setupSmallInteractions(); setupPaymentSettings(); setupBirthdaySettings(); setupPendingConfirmations(); setupCreateWishlist(); setupKakaoLogin(); hydrateMyRemoteWishlist(); setupHomeWishlistStatus();
 contributionChannel?.addEventListener('message', event => {
   if (event.data?.type !== 'contribution-confirmed') return;
   if (ownerId && event.data.owner === ownerId) setupPublicProfile();
