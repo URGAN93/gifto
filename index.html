@@ -20,16 +20,11 @@
       <p class="hero-copy">내가 원하는 것을 자연스럽게 공유하세요.<br />소중한 사람들이 마음을 더할 수 있어요.</p>
       <div class="hero-visual" aria-hidden="true"><span>🎁</span><i></i><b>♥</b></div>
       <a class="button button-primary button-large" href="pages/create.html">내 위시리스트 만들기 <span>→</span></a>
-      <a class="button button-ghost button-large" href="pages/wishlist.html">친구 위시리스트 보기</a>
     </section>
 
-    <section class="section">
-      <div class="section-heading"><div><p class="eyebrow">이번 주</p><h2>생일인 친구</h2></div><a href="pages/wishlist.html">모두 보기</a></div>
-      <div class="birthday-list">
-        <a class="birthday-card" href="pages/wishlist.html?owner=seongmin"><div class="avatar avatar-blue">S</div><div><strong>심성민</strong><span>D-12 · 9월 22일</span></div><em>🎂</em></a>
-        <a class="birthday-card" href="pages/wishlist.html?owner=jiyoon"><div class="avatar avatar-peach">J</div><div><strong>지윤</strong><span>D-4 · 9월 14일</span></div><em>🎈</em></a>
-        <a class="birthday-card" href="pages/wishlist.html?owner=minji"><div class="avatar avatar-lilac">M</div><div><strong>민지</strong><span>D-6 · 9월 16일</span></div><em>✨</em></a>
-      </div>
+    <section class="section" id="friend-wishlists">
+      <div class="section-heading"><div><p class="eyebrow">다가오는 이벤트</p><h2>친구 위시리스트</h2></div><span class="subtle">가까운 순</span></div>
+      <div class="birthday-list" data-friend-list></div>
     </section>
   </main>
   <script src="js/app.js"></script>
