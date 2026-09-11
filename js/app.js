@@ -321,12 +321,19 @@ function setupPaymentSettings() {
       const kakaoQr = qr || info.kakaoQr || '';
       const decoded = await decodeQrPayload(kakaoQr);
       const nextInfo = {kakaoQr, kakaoUrl:isKakaoPayLink(decoded) ? decoded : ''};
-      savePaymentInfo(nextInfo);
       const {data} = await window.giftoDb.auth.getSession();
-      if (data.session) {
-        const {error} = await window.giftoDb.from('profiles').update({kakao_pay_qr_url:kakaoQr || null, kakao_pay_url:nextInfo.kakaoUrl || null}).eq('id', data.session.user.id);
-        if (error) { showToast('QR은 이 기기에 저장됐어요. 공유 저장은 다시 시도해 주세요.'); return; }
+      if (!data.session) { showToast('공유하려면 카카오 계정으로 로그인한 뒤 QR을 저장해 주세요.'); return; }
+      const {data: savedProfile, error} = await window.giftoDb
+        .from('profiles')
+        .update({kakao_pay_qr_url:kakaoQr || null, kakao_pay_url:nextInfo.kakaoUrl || null})
+        .eq('id', data.session.user.id)
+        .select('id,kakao_pay_qr_url')
+        .maybeSingle();
+      if (error || !savedProfile?.kakao_pay_qr_url) {
+        showToast('공유용 QR 저장에 실패했어요. 로그인 상태를 확인한 뒤 다시 저장해 주세요.');
+        return;
       }
+      savePaymentInfo(nextInfo);
       showToast(nextInfo.kakaoUrl ? '카카오페이 송금 주소까지 저장했어요.' : 'QR을 저장했어요. 친구에게 QR을 보여줘요.');
     };
     const file = kakao.files[0];
