@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>참여 내역 | GIFTO</title>
-  <link rel="stylesheet" href="../css/style.css?v=20260929" />
+  <link rel="stylesheet" href="../css/style.css?v=20260947" />
 </head>
 <body>
   <main class="app-shell">
@@ -13,9 +13,10 @@
       <h1 class="page-title">참여 내역</h1>
       <span class="topbar-spacer"></span>
     </header>
-    <section class="form-page">
+    <section class="form-page" data-participants-page hidden>
       <p class="eyebrow">GIFT CONTRIBUTIONS</p>
       <h1 data-participant-product>상품</h1>
+      <div class="participant-product-card" data-participant-card></div>
       <div class="participants-summary">
         <p>친구들이 모아 준 마음</p>
         <strong data-participant-total>₩ 0</strong>
@@ -25,7 +26,7 @@
     </section>
   </main>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="../js/supabase.js?v=20260929"></script>
-  <script src="../js/app.js?v=20260929"></script>
+  <script src="../js/supabase.js?v=20260939"></script>
+  <script src="../js/app.js?v=20260958"></script>
 </body>
 </html>

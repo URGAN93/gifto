@@ -27,8 +27,9 @@
 <body>
   <main class="app-shell home">
     <header class="topbar">
+      <span class="topbar-spacer" aria-hidden="true"></span>
       <a class="brand" href="index.html" aria-label="GIFTO 홈"><span class="brand-mark">G</span> GIFTO</a>
-      <a class="icon-button" href="pages/login.html" data-auth-destination="pages/my-page.html" aria-label="내 페이지">☺</a>
+      <a class="icon-button pending-anchor" href="pages/login.html" data-auth-destination="pages/my-page.html" aria-label="내 페이지">☺<span class="pending-badge" data-pending-badge hidden aria-label="입금 확인 대기 건수"></span></a>
     </header>
 
     <section class="hero">
@@ -49,7 +50,7 @@
   </main>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="js/supabase.js?v=20260913"></script>
-  <script src="js/app.js?v=20260938"></script>
+  <script src="js/app.js?v=20260952"></script>
   <script src="js/pwa.js?v=1"></script>
 </body>
 </html>

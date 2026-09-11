@@ -1,4 +1,11 @@
 const DEFAULT_PRODUCTS = [];
+const GIFT_CATEGORIES = {
+  birthday: {icon:'🎂', label:'생일 선물', title:'나의 생일 선물', note:'생일에 받고 싶은 선물을 모아봤어요. 함께해 주는 마음만으로도 고마워요 🎁'},
+  support: {icon:'💛', label:'응원 모금', title:'따뜻한 응원을 모아요', note:'따뜻한 마음을 모아 응원해 주세요.'},
+  celebration: {icon:'✨', label:'기념 선물', title:'기념하고 싶은 순간', note:'함께 축하해 주는 마음을 모아 주세요.'},
+  housewarming: {icon:'🏠', label:'집들이 선물', title:'새 집에 필요한 선물', note:'새로운 시작을 위한 선물을 함께 골라 주세요.'},
+  together: {icon:'🎁', label:'함께 선물', title:'함께 전하는 선물', note:'소중한 마음을 모아 특별한 선물을 준비해요.'}
+};
 const storageKey = 'gifto-no-account-wishlist';
 const getProducts = () => {
   try {
@@ -18,6 +25,16 @@ const sharedProfiles = {};
 const ownerId = new URLSearchParams(location.search).get('owner') || '';
 const activeProfile = sharedProfiles[ownerId] || { name: 'GIFTO 친구', initial: 'G', countdown: '', eventDate: '', eventEmoji: '🎁', avatar: 'avatar-blue', products: [] };
 const won = value => `₩ ${value.toLocaleString('ko-KR')}`;
+const parseMoney = value => Number(String(value || '').replace(/[^\d]/g, '')) || 0;
+function setupMoneyInput(input) {
+  if (!input) return;
+  const paint = () => {
+    const amount = parseMoney(input.value);
+    input.value = amount ? amount.toLocaleString('ko-KR') : '';
+  };
+  input.addEventListener('input', paint);
+  paint();
+}
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const isUuid = value => /^[\da-f]{8}(-[\da-f]{4}){3}-[\da-f]{12}$/i.test(value || '');
 const remoteWishlistCache = new Map();
@@ -37,11 +54,11 @@ async function loadRemoteWishlist(owner) {
   if (profileError || !profile) throw new Error('PROFILE_NOT_FOUND');
   const {data: wishlist, error: wishlistError} = await window.giftoDb.from('wishlists').select('id,title,note').eq('owner_id', owner).eq('is_public', true).order('created_at', {ascending:false}).limit(1).maybeSingle();
   if (wishlistError || !wishlist) throw new Error('WISHLIST_NOT_FOUND');
-  const {data: rows, error: itemError} = await window.giftoDb.from('wishlist_items').select('id,name,price,product_url,image_url,emoji,color,position,contributions(id,contributor_name,amount,status,created_at)').eq('wishlist_id', wishlist.id).order('position');
+  const {data: rows, error: itemError} = await window.giftoDb.from('wishlist_items').select('id,name,price,product_url,image_url,emoji,color,position,status,shared_at,closed_at,proof_image_url,proof_message,proof_published_at,contributions(id,contributor_name,amount,status,created_at,confirmed_at)').eq('wishlist_id', wishlist.id).order('position');
   if (itemError) throw itemError;
   const products = (rows || []).map(row => {
     const confirmed = (row.contributions || []).filter(contribution => contribution.status === 'confirmed');
-    return {id:row.id, dbId:row.id, name:row.name, price:row.price, productUrl:row.product_url || '', imageUrl:row.image_url || '', emoji:row.emoji, color:row.color, raised:confirmed.reduce((sum, contribution) => sum + contribution.amount, 0), supporters:confirmed.length, contributors:confirmed, hasContributions:(row.contributions || []).length > 0};
+    return {id:row.id, dbId:row.id, name:row.name, price:row.price, productUrl:row.product_url || '', imageUrl:row.image_url || '', emoji:row.emoji, color:row.color, status:row.status || 'draft', sharedAt:row.shared_at, closedAt:row.closed_at, proofImageUrl:row.proof_image_url || '', proofMessage:row.proof_message || '', proofPublishedAt:row.proof_published_at, raised:confirmed.reduce((sum, contribution) => sum + contribution.amount, 0), supporters:confirmed.length, contributors:confirmed, allContributions:row.contributions || [], hasContributions:(row.contributions || []).length > 0};
   });
   const loaded = {profile, wishlist, products}; remoteWishlistCache.set(owner, loaded); return loaded;
 }
@@ -71,12 +88,17 @@ function renderProducts() {
     }
     list.innerHTML = products.map(rawProduct => {
       const product = {...rawProduct, name:escapeHtml(rawProduct.name), imageUrl:escapeHtml(rawProduct.imageUrl), emoji:escapeHtml(rawProduct.emoji), color:escapeHtml(rawProduct.color), id:encodeURIComponent(rawProduct.id)};
-      const percent = Math.round(product.raised / product.price * 100);
+      const percent = Math.min(100, Math.round(product.raised / product.price * 100));
+      const closed = product.status === 'closed' || product.status === 'proof_posted' || product.isClosed;
+      const draft = product.status === 'draft';
+      const statusText = product.status === 'proof_posted' ? '선물 인증 완료' : closed ? '마감된 선물' : draft ? '준비 중' : '마음이 모이는 중';
+      const actionText = closed ? (product.status === 'proof_posted' ? '인증 보기' : '마감됨') : draft && isPublic ? '준비 중' : (isPublic ? '함께 선물하기' : '참여 보기');
+      const actionClass = closed || (draft && isPublic) ? 'card-button is-disabled' : 'card-button';
       return `<article class="product-card">
         <div class="product-image" style="--image-bg:${product.color}">${product.emoji}${product.imageUrl ? `<img src="${product.imageUrl}" alt="${product.name}" />` : ''}</div>
-        <div class="product-body"><div class="product-top"><div><h3 class="product-name">${product.name}</h3><span class="product-price">${won(product.price)}</span></div><span class="tag">${product.supporters}명 참여</span></div>
+        <div class="product-body"><div class="product-top"><div><h3 class="product-name">${product.name}</h3><span class="product-price">${won(product.price)}</span></div><div class="product-tags"><span class="product-state state-${product.status || 'open'}">${statusText}</span><span class="tag">${product.supporters}명 참여</span></div></div>
         <div class="progress-label"><span>${percent}% 모였어요</span><strong>${won(product.raised)} <small>/ ${product.price.toLocaleString()}원</small></strong></div><div class="progress"><i style="width:${percent}%"></i></div>
-        <div class="card-bottom"><span>마음을 모아 선물해요</span><a class="card-button" href="contribute.html?product=${product.id}${isPublic ? `&owner=${ownerId}` : ''}">${isPublic ? '함께 선물하기' : '참여 보기'}</a></div></div></article>`;
+        <div class="card-bottom"><span>${closed ? '마음이 모였어요' : draft ? '공개 준비 중' : '마음을 모아 선물해요'}</span><a class="${actionClass}" href="${closed ? (product.status === 'proof_posted' ? `thankyou.html?product=${product.id}${isPublic ? `&owner=${ownerId}` : ''}` : '#') : draft && isPublic ? '#' : `contribute.html?product=${product.id}${isPublic ? `&owner=${ownerId}` : ''}`}">${actionText}</a></div></div></article>`;
     }).join('');
   });
 }
@@ -89,32 +111,37 @@ async function setupHomeWishlistStatus() {
   const {data: auth} = await window.giftoDb.auth.getSession();
   if (!auth.session) { revealPrimaryAction(); return; }
   const cacheKey = 'gifto-home-wishlist-status';
-  const reveal = async product => {
-    const percent = product.price ? Math.round((product.raised || 0) / product.price * 100) : 0;
+  const reveal = async products => {
     status.hidden = true;
-    status.innerHTML = `<a href="pages/my-page.html" class="home-wishlist-card"><div class="home-wishlist-image" style="--image-bg:${escapeHtml(product.color || '#f2f7ff')}">${escapeHtml(product.emoji || '🎁')}${product.imageUrl ? `<img src="${escapeHtml(product.imageUrl)}" alt="${escapeHtml(product.name)}" />` : ''}</div><div><p>나의 위시리스트 현황</p><strong>${escapeHtml(product.name)}</strong><span>${won(product.raised || 0)} 모임 · ${percent}% · ${product.supporters || 0}명 참여</span></div><b>›</b></a>`;
-    const image = status.querySelector('img');
-    if (image && !image.complete) await Promise.race([new Promise(resolve => { image.onload = resolve; image.onerror = resolve; }), new Promise(resolve => setTimeout(resolve, 700))]);
+    status.innerHTML = `<div class="home-wishlist-list">${products.map((product, index) => { const percent = product.price ? Math.min(100, Math.round((product.raised || 0) / product.price * 100)) : 0; return `<a href="pages/participants.html?product=${encodeURIComponent(product.id)}&from=home" class="home-wishlist-card"><div class="home-wishlist-image" style="--image-bg:${escapeHtml(product.color || '#f2f7ff')}">${escapeHtml(product.emoji || '🎁')}${product.imageUrl ? `<img src="${escapeHtml(product.imageUrl)}" alt="${escapeHtml(product.name)}" />` : ''}</div><div><p>${index === 0 ? '나의 위시리스트 현황' : '나의 위시리스트'}</p><strong>${escapeHtml(product.name)}</strong><span>${won(product.raised || 0)} 모임 · ${percent}% · ${product.supporters || 0}명 참여</span></div><b>›</b></a>`; }).join('')}</div>`;
+    const images = [...status.querySelectorAll('img')].filter(image => !image.complete);
+    if (images.length) await Promise.race([Promise.all(images.map(image => new Promise(resolve => { image.onload = resolve; image.onerror = resolve; }))), new Promise(resolve => setTimeout(resolve, 700))]);
     status.hidden = false;
+    status.querySelectorAll('.home-wishlist-card').forEach(card => card.addEventListener('click', () => {
+      sessionStorage.setItem('gifto-home-scroll-y', String(window.scrollY));
+      sessionStorage.setItem('gifto-participants-from-home', '1');
+    }));
   };
   let cached;
   try { cached = JSON.parse(localStorage.getItem(cacheKey) || 'null'); } catch {}
-  if (cached?.ownerId === auth.session.user.id && cached.product) await reveal(cached.product);
   let products = [];
   try {
     const remote = await loadRemoteWishlist(auth.session.user.id);
     products = remote.products;
   } catch {
-    products = appData.products;
+    products = cached?.ownerId === auth.session.user.id && Array.isArray(cached.products) ? cached.products : appData.products;
   }
   if (!products.length) { revealPrimaryAction(); return; }
-  const product = products[0];
-  const nextSnapshot = JSON.stringify(product);
-  if (JSON.stringify(cached?.product) !== nextSnapshot) await reveal(product);
-  try { localStorage.setItem(cacheKey, JSON.stringify({ownerId:auth.session.user.id, product})); } catch {}
+  await reveal(products);
+  try { localStorage.setItem(cacheKey, JSON.stringify({ownerId:auth.session.user.id, products})); } catch {}
   const create = document.querySelector('[data-auth-destination="pages/create.html"]');
-  if (create) { create.href = 'pages/my-page.html'; create.childNodes[0].nodeValue = '내 위시리스트 관리 '; }
+  if (create) { create.href = 'pages/create.html'; create.childNodes[0].nodeValue = '+ 위시리스트 추가하기 '; }
   revealPrimaryAction();
+  const savedScroll = Number(sessionStorage.getItem('gifto-home-scroll-y'));
+  if (Number.isFinite(savedScroll) && savedScroll > 0) {
+    sessionStorage.removeItem('gifto-home-scroll-y');
+    requestAnimationFrame(() => window.scrollTo(0, savedScroll));
+  }
 }
 
 async function setupContribution() {
@@ -135,6 +162,10 @@ async function setupContribution() {
     selected.innerHTML = '<p class="empty-state">이 선물을 찾지 못했어요.</p>';
     return;
   }
+  if (product.status && product.status !== 'open') {
+    selected.innerHTML = '<p class="empty-state">이 선물은 마감되었거나 아직 공개 전이에요.</p>';
+    return;
+  }
   selected.innerHTML = `<div class="product-image" style="--image-bg:${product.color}">${product.emoji}</div><div class="product-body"><h2 class="product-name">${product.name}</h2><span class="product-price">${won(product.price)} · ${Math.round(product.raised/product.price*100)}% 모였어요</span></div>`;
   document.querySelector('[data-recipient-name]').textContent = `${activeProfile.name}에게 마음을 전해요`;
   const input = document.querySelector('#custom-amount');
@@ -145,18 +176,28 @@ async function setupContribution() {
   const getContributionPaymentInfo = () => ownerId === 'seongmin' ? getPaymentInfo() : (activeProfile.paymentInfo || {});
   const returnKey = 'gifto-returning-from-kakao';
   const showAmountStep = () => { amountStep.hidden = false; fallback.hidden = true; sendButton.hidden = true; input.focus(); };
-  if (sessionStorage.getItem(returnKey) === product.id) { sessionStorage.removeItem(returnKey); showAmountStep(); }
+  const resumeAfterKakao = () => {
+    if (sessionStorage.getItem(returnKey) !== product.id) return;
+    sessionStorage.removeItem(returnKey); showAmountStep();
+  };
+  if (sessionStorage.getItem(returnKey) === product.id) resumeAfterKakao();
+  window.addEventListener('pageshow', resumeAfterKakao);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) resumeAfterKakao(); });
   sendButton.addEventListener('click', async () => {
     const paymentInfo = getContributionPaymentInfo();
     if (!paymentInfo.kakaoQr) { showToast('아직 카카오페이 송금 QR이 등록되지 않았어요.'); return; }
     sendButton.disabled = true; sendButton.textContent = '카카오페이 연결 중…';
     const url = paymentInfo.kakaoUrl || await decodeQrPayload(paymentInfo.kakaoQr);
     if (url && isKakaoPayLink(url)) {
-      sessionStorage.setItem(returnKey, product.id);
-      location.href = url;
+      fallback.innerHTML = '<strong>카카오페이로 이동할게요</strong><p>카카오페이에서 송금한 뒤, 브라우저의 뒤로가기 또는 앱 전환으로 GIFTO에 돌아와 주세요. 돌아오면 금액 입력 화면이 자동으로 열립니다.</p>';
+      fallback.hidden = false; sendButton.hidden = true;
+      const open = document.createElement('button'); open.type = 'button'; open.className = 'button button-primary'; open.textContent = '카카오페이 열기';
+      open.addEventListener('click', () => { sessionStorage.setItem(returnKey, product.id); location.href = url; });
+      fallback.append(open);
       return;
     }
-    fallback.innerHTML = '<strong>카카오페이 QR 송금</strong><p>카카오톡에서 코드 스캔을 열고 QR을 스캔해 송금해 주세요. 송금 뒤 이 화면으로 돌아오면 금액을 입력할 수 있어요.</p><img alt="카카오페이 송금 QR 코드" />';
+    sessionStorage.setItem(returnKey, product.id);
+    fallback.innerHTML = '<strong>카카오페이 QR 송금</strong><p>카카오톡에서 코드 스캔을 열고 QR을 스캔해 송금해 주세요. GIFTO로 돌아오면 금액 입력 화면이 자동으로 열립니다.</p><img alt="카카오페이 송금 QR 코드" />';
     fallback.querySelector('img').src = paymentInfo.kakaoQr;
     fallback.hidden = false; sendButton.hidden = true;
     const returned = document.createElement('button'); returned.type = 'button'; returned.className = 'button button-primary'; returned.textContent = '송금 후 돌아왔어요';
@@ -178,7 +219,9 @@ async function reportContribution(product, amount) {
   const {data: auth, error: authError} = await window.giftoDb.auth.getSession();
   if (authError || !auth.session) throw new Error('송금 완료 처리는 로그인 후 할 수 있어요.');
   const metadata = auth.session.user.user_metadata || {};
-  const name = metadata.full_name || metadata.name || metadata.nickname || 'GIFTO 친구';
+  const {data: profile} = await window.giftoDb.from('profiles').select('display_name').eq('id', auth.session.user.id).maybeSingle();
+  if (profile?.display_name) localStorage.setItem('gifto-display-name:' + auth.session.user.id, profile.display_name);
+  const name = profile?.display_name || metadata.full_name || metadata.name || metadata.nickname || 'GIFTO 친구';
   const {error} = await window.giftoDb.from('contributions').insert({item_id:product.dbId, contributor_id:auth.session.user.id, contributor_name:name, amount, status:'pending'});
   if (error) throw new Error('송금 완료 처리를 하지 못했어요.');
 }
@@ -240,20 +283,29 @@ function setupSmallInteractions() {
     if (!shareOwner) { showToast('로그인 후 내 위시리스트를 공유해 주세요.'); return; }
     if (!ownerId && data.session) {
       button.disabled = true; button.textContent = '공개 링크 준비 중…';
-      try { await ensureCloudShare(data.session.user); }
+      try {
+        const wishlist = await ensureCloudShare(data.session.user);
+        const {data: openItems, error} = await window.giftoDb.from('wishlist_items').select('id').eq('wishlist_id', wishlist.id).eq('status', 'open').limit(1);
+        if (error) throw error;
+        if (!(openItems || []).length) {
+          button.disabled = false; button.textContent = '↗ 내 위시리스트 공유하기';
+          showToast('먼저 상품에서 공개 시작을 눌러 주세요.');
+          return;
+        }
+      }
       catch { button.disabled = false; button.textContent = '↗ 내 위시리스트 공유하기'; showToast('공개 위시리스트를 만들지 못했어요.'); return; }
       button.disabled = false; button.textContent = '↗ 내 위시리스트 공유하기';
     }
-    const shareUrl = new URL('wishlist.html?owner=' + encodeURIComponent(shareOwner), location.href).href;
+    let category = 'birthday';
+    try { category = JSON.parse(localStorage.getItem('gifto-wishlist-details:' + shareOwner) || '{}').category || category; } catch {}
+    const shareUrl = new URL('wishlist.html?owner=' + encodeURIComponent(shareOwner) + '&category=' + encodeURIComponent(category), location.href).href;
     try { await navigator.clipboard.writeText(shareUrl); saveWishlistState({...getWishlistState(), shared:true}); showToast('위시리스트 링크가 복사되었어요!'); }
     catch { showToast('링크를 복사하지 못했어요. 주소창의 주소를 복사해 주세요.'); }
   }));
   document.querySelectorAll('[data-toast]').forEach(button => button.addEventListener('click', () => {
     showToast(button.dataset.toast);
   }));
-  const upload = document.querySelector('[data-photo-upload]');
-  upload?.addEventListener('click', () => { upload.classList.add('uploaded'); upload.innerHTML = '<span>📷</span><strong>선물 사진이 추가되었어요</strong><small>프로토타입용 미리보기</small>'; });
-  document.querySelector('[data-thanks-submit]')?.addEventListener('click', event => { const preview = document.querySelector('.thanks-preview'); preview.hidden = false; event.currentTarget.textContent = '공유되었어요 ✓'; event.currentTarget.disabled = true; });
+  setupThankYou();
   const completeTitle = document.querySelector('[data-complete-title]');
   if (completeTitle) {
     const params = new URLSearchParams(location.search); const amount = Number(params.get('amount')) || 0;
@@ -309,38 +361,48 @@ function setupPaymentSettings() {
   if (!form) return;
   const info = getPaymentInfo();
   const kakao = document.querySelector('#payment-kakao');
-  form.closest('.payment-settings').querySelector('h2').textContent = '송금 정보 설정';
-  form.closest('.payment-settings').querySelector('.settings-copy').textContent = '카카오페이 코드송금 QR을 등록해 주세요.';
-  kakao.type = 'file'; kakao.accept = 'image/*'; kakao.value = '';
+  const section = form.closest('.payment-settings');
+  section.querySelector('h2').textContent = '카카오페이 송금 설정';
+  section.querySelector('.settings-copy').textContent = 'QR을 설정하면 친구가 함께하기에서 바로 카카오페이로 이동할 수 있어요.';
+  kakao.type = 'file'; kakao.accept = 'image/*'; kakao.value = ''; kakao.className = 'sr-only';
   kakao.previousElementSibling.textContent = '카카오페이 송금 QR';
-  const help = document.createElement('p'); help.className = 'field-help'; help.textContent = '내 카카오페이 코드송금 QR 이미지를 저장한 뒤, 위에서 파일을 선택해 주세요. 금액을 지정하지 않은 QR을 등록해 주세요.';
-  kakao.insertAdjacentElement('afterend', help);
-  const savedUrlLabel = document.createElement('label');
-  savedUrlLabel.className = 'field-label'; savedUrlLabel.textContent = '저장된 카카오페이 송금 URL';
-  const savedUrl = document.createElement('input');
-  savedUrl.className = 'text-field'; savedUrl.type = 'url'; savedUrl.readOnly = true;
-  savedUrl.placeholder = 'QR을 저장하면 실제 송금 주소가 표시돼요.';
-  const copyUrl = document.createElement('button');
-  copyUrl.type = 'button'; copyUrl.className = 'button button-ghost'; copyUrl.textContent = '송금 URL 복사'; copyUrl.hidden = true;
-  const showSavedUrl = value => {
-    const url = isKakaoPayLink(value) ? value : '';
-    savedUrl.value = url; copyUrl.hidden = !url;
-  };
-  copyUrl.addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(savedUrl.value); showToast('카카오페이 송금 URL을 복사했어요.'); }
-    catch { savedUrl.focus(); savedUrl.select(); showToast('URL을 길게 눌러 복사해 주세요.'); }
+  const configured = document.createElement('div'); configured.className = 'payment-configured'; configured.hidden = true;
+  configured.innerHTML = '<div><strong>카카오페이 송금 설정 완료</strong><span>친구가 바로 송금할 수 있어요.</span></div><button type="button">설정 확인·변경</button>';
+  section.querySelector('.settings-copy').insertAdjacentElement('afterend', configured);
+  const configuredButton = configured.querySelector('button');
+  let editing = false;
+  configuredButton.addEventListener('click', () => {
+    editing = !editing;
+    form.hidden = !editing;
+    configuredButton.textContent = editing ? '접기' : '설정 확인·변경';
   });
-  help.insertAdjacentElement('afterend', savedUrlLabel);
-  savedUrlLabel.insertAdjacentElement('afterend', savedUrl);
-  savedUrl.insertAdjacentElement('afterend', copyUrl);
-  showSavedUrl(info.kakaoUrl);
+  const setConfigured = ready => {
+    configured.hidden = !ready;
+    editing = false;
+    form.hidden = ready;
+    configuredButton.textContent = '설정 확인·변경';
+  };
+  const picker = document.createElement('button');
+  picker.type = 'button'; picker.className = 'photo-picker'; picker.textContent = '🖼 사진첩에서 QR 고르기';
+  picker.addEventListener('click', () => kakao.click());
+  kakao.insertAdjacentElement('afterend', picker);
+  const help = document.createElement('p'); help.className = 'field-help'; help.textContent = '카카오페이 코드송금 QR 이미지를 골라 주세요. 금액을 지정하지 않은 QR을 등록해 주세요.';
+  picker.insertAdjacentElement('afterend', help);
+  setConfigured(!!info.kakaoQr);
   window.giftoDb.auth.getSession().then(async ({data}) => {
     if (!data.session) return;
-    const {data: profile} = await window.giftoDb.from('profiles').select('kakao_pay_url').eq('id', data.session.user.id).maybeSingle();
-    if (profile?.kakao_pay_url) showSavedUrl(profile.kakao_pay_url);
+    const {data: profile} = await window.giftoDb.from('profiles').select('kakao_pay_qr_url').eq('id', data.session.user.id).maybeSingle();
+    if (profile?.kakao_pay_qr_url) setConfigured(true);
   });
   const preview = document.createElement('img'); preview.className = 'payment-qr-preview'; preview.alt = '등록한 카카오페이 송금 QR';
-  if (info.kakaoQr) { preview.src = info.kakaoQr; kakao.insertAdjacentElement('afterend', preview); }
+  if (info.kakaoQr) { preview.src = info.kakaoQr; picker.insertAdjacentElement('afterend', preview); }
+  kakao.addEventListener('change', () => {
+    const file = kakao.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => { preview.src = reader.result; picker.insertAdjacentElement('afterend', preview); };
+    reader.readAsDataURL(file);
+  });
   form.addEventListener('submit', async event => {
     event.preventDefault();
     const save = async qr => {
@@ -360,8 +422,8 @@ function setupPaymentSettings() {
         return;
       }
       savePaymentInfo(nextInfo);
-      showSavedUrl(savedProfile.kakao_pay_url);
-      showToast(nextInfo.kakaoUrl ? '카카오페이 송금 주소까지 저장했어요.' : 'QR을 저장했어요. 친구에게 QR을 보여줘요.');
+      setConfigured(true);
+      showToast('카카오페이 송금 설정을 저장했어요.');
     };
     const file = kakao.files[0];
     if (!file) { save(''); return; }
@@ -399,6 +461,85 @@ async function setupBirthdaySettings() {
     form.hidden = true; locked.hidden = false; locked.textContent = `${Number(month.value)}월 ${Number(day.value)}일 · 한 번 저장한 생일은 바꿀 수 없어요.`; showToast('생일을 저장했어요.');
   });
 }
+async function setupDisplayName() {
+  const toggle = document.querySelector('[data-display-name-toggle]');
+  if (!toggle || !window.giftoDb) return;
+  const {data: auth} = await window.giftoDb.auth.getSession();
+  if (!auth.session) { toggle.hidden = true; return; }
+  const {data: profile} = await window.giftoDb.from('profiles').select('display_name').eq('id', auth.session.user.id).maybeSingle();
+  toggle.addEventListener('click', () => {
+    const layer = document.createElement('div'); layer.className = 'display-name-layer';
+    layer.innerHTML = `<form class="display-name-modal"><div class="product-editor-heading"><h2>닉네임 수정</h2><button type="button" aria-label="닫기" data-close-name>×</button></div><p>친구와 공유 페이지에 보여질 닉네임이에요.</p><label class="field-label" for="display-name">닉네임</label><input id="display-name" class="text-field" maxlength="20" value="${escapeHtml(profile?.display_name || document.querySelector('[data-account-name]')?.textContent || '')}" /><button class="button button-primary" type="submit">저장</button></form>`;
+    const close = () => layer.remove();
+    layer.addEventListener('click', event => { if (event.target === layer) close(); });
+    layer.querySelector('[data-close-name]').addEventListener('click', close);
+    const input = layer.querySelector('#display-name');
+    layer.querySelector('form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const name = input.value.trim();
+      if (name.length < 1 || name.length > 20) { showToast('이름은 1~20자로 입력해 주세요.'); return; }
+      const button = layer.querySelector('[type="submit"]'); button.disabled = true; button.textContent = '저장 중…';
+      const {error} = await window.giftoDb.from('profiles').update({display_name:name}).eq('id', auth.session.user.id);
+      if (error) { button.disabled = false; button.textContent = '저장'; showToast('이름을 저장하지 못했어요.'); return; }
+      document.querySelectorAll('[data-account-name]').forEach(element => { element.textContent = name; });
+      localStorage.setItem('gifto-display-name:' + auth.session.user.id, name);
+      document.querySelectorAll('[data-account-avatar]').forEach(element => { if (!element.querySelector('img')) element.textContent = Array.from(name)[0]; });
+      clearRemoteWishlist(auth.session.user.id); contributionChannel?.postMessage({type:'profile-updated', owner:auth.session.user.id});
+      close(); showToast('닉네임을 저장했어요.');
+    });
+    document.body.append(layer); input.focus(); input.select();
+  });
+}
+async function setupProfileAvatar() {
+  const toggle = document.querySelector('[data-profile-avatar-toggle]');
+  if (!toggle || !window.giftoDb) return;
+  const {data: auth} = await window.giftoDb.auth.getSession();
+  if (!auth.session) { toggle.hidden = true; return; }
+  const {data: profile} = await window.giftoDb.from('profiles').select('avatar_url,display_name').eq('id', auth.session.user.id).maybeSingle();
+  const name = profile?.display_name || document.querySelector('[data-account-name]')?.textContent || 'G';
+  localStorage.setItem('gifto-profile-avatar:' + auth.session.user.id, profile?.avatar_url || '');
+  const paintAvatar = url => {
+    document.querySelectorAll('[data-account-avatar]').forEach(avatar => {
+      avatar.replaceChildren();
+      if (/^(https?:\/\/|data:image\/)/i.test(url || '')) { const image = document.createElement('img'); image.alt = name + ' 프로필 사진'; image.src = url; avatar.append(image); }
+      else avatar.textContent = Array.from(name)[0];
+    });
+  };
+  paintAvatar(profile?.avatar_url || '');
+  toggle.addEventListener('click', () => {
+    let pendingUrl = profile?.avatar_url || '';
+    const layer = document.createElement('div'); layer.className = 'display-name-layer';
+    layer.innerHTML = `<section class="profile-avatar-modal"><div class="product-editor-heading"><h2>프로필 사진</h2><button type="button" aria-label="닫기" data-close-avatar>×</button></div><div class="avatar avatar-large avatar-blue" data-avatar-preview>${Array.from(name)[0]}</div><p>사진을 쓰지 않으면 이름 첫 글자로 표시돼요.</p><button type="button" class="photo-picker" data-avatar-picker>🖼 사진첩에서 고르기</button><input class="sr-only" type="file" accept="image/*" data-avatar-file /><button type="button" class="button button-ghost" data-remove-avatar>사진 없이 사용</button><button type="button" class="button button-primary" data-save-avatar>저장</button></section>`;
+    const close = () => layer.remove(); const preview = layer.querySelector('[data-avatar-preview]');
+    const paintPreview = () => { preview.replaceChildren(); if (/^(https?:\/\/|data:image\/)/i.test(pendingUrl || '')) { const image = document.createElement('img'); image.alt = '선택한 프로필 사진'; image.src = pendingUrl; preview.append(image); } else preview.textContent = Array.from(name)[0]; };
+    paintPreview();
+    layer.addEventListener('click', event => { if (event.target === layer) close(); }); layer.querySelector('[data-close-avatar]').addEventListener('click', close);
+    const input = layer.querySelector('[data-avatar-file]'); layer.querySelector('[data-avatar-picker]').addEventListener('click', () => input.click());
+    input.addEventListener('change', async () => { const file = input.files[0]; if (!file) return; try { const result = await compressProductPhoto(file); pendingUrl = result.url; paintPreview(); } catch (error) { showToast(error.message || '사진을 읽지 못했어요.'); } });
+    layer.querySelector('[data-remove-avatar]').addEventListener('click', () => { pendingUrl = ''; paintPreview(); });
+    layer.querySelector('[data-save-avatar]').addEventListener('click', async event => {
+      const button = event.currentTarget; button.disabled = true; button.textContent = '저장 중…';
+      const {error} = await window.giftoDb.from('profiles').update({avatar_url:pendingUrl || null}).eq('id', auth.session.user.id);
+      if (error) { button.disabled = false; button.textContent = '저장'; showToast('프로필 사진을 저장하지 못했어요.'); return; }
+      localStorage.setItem('gifto-profile-avatar:' + auth.session.user.id, pendingUrl || ''); paintAvatar(pendingUrl); clearRemoteWishlist(auth.session.user.id); contributionChannel?.postMessage({type:'profile-updated', owner:auth.session.user.id}); close(); showToast(pendingUrl ? '프로필 사진을 저장했어요.' : '프로필 사진 없이 표시할게요.');
+    });
+    document.body.append(layer);
+  });
+}
+function setupProfileEdit() {
+  const button = document.querySelector('[data-profile-edit]');
+  if (!button) return;
+  button.addEventListener('click', () => {
+    const layer = document.createElement('div'); layer.className = 'display-name-layer';
+    layer.innerHTML = `<section class="profile-edit-sheet"><div class="product-editor-heading"><h2>프로필 편집</h2><button type="button" aria-label="닫기" data-close-profile-edit>×</button></div><p>GIFTO에서 친구에게 보여질 정보를 설정해요.</p><button type="button" data-open-nickname><span>✎</span><div><strong>닉네임 수정</strong><small>공유 페이지와 참여 내역에 표시돼요.</small></div><b>›</b></button><button type="button" data-open-avatar><span>◉</span><div><strong>프로필 사진</strong><small>사진을 쓰지 않으면 이니셜로 표시돼요.</small></div><b>›</b></button></section>`;
+    const close = () => layer.remove();
+    layer.addEventListener('click', event => { if (event.target === layer) close(); });
+    layer.querySelector('[data-close-profile-edit]').addEventListener('click', close);
+    layer.querySelector('[data-open-nickname]').addEventListener('click', () => { close(); document.querySelector('[data-display-name-toggle]')?.click(); });
+    layer.querySelector('[data-open-avatar]').addEventListener('click', () => { close(); document.querySelector('[data-profile-avatar-toggle]')?.click(); });
+    document.body.append(layer);
+  });
+}
 function showToast(message) {
   const toast = document.createElement('div'); toast.className = 'toast'; toast.textContent = message; document.body.append(toast);
   requestAnimationFrame(() => toast.classList.add('show')); setTimeout(() => toast.remove(), 1800);
@@ -410,24 +551,34 @@ function setupWishlistEditing() {
     const product = appData.products[index];
     if (product.dbId) {
       const action = card.querySelector('.card-button');
-      if (action) { action.href = 'participants.html?product=' + encodeURIComponent(product.id); action.textContent = '참여 보기'; }
-      const remoteAction = document.createElement('div'); remoteAction.className = 'product-actions';
-      if (product.hasContributions || product.raised > 0 || product.supporters > 0) {
-        const state = document.createElement('button'); state.type = 'button'; state.className = 'product-delete is-locked';
-        state.textContent = '진행 중'; state.disabled = true; remoteAction.append(state);
-      } else {
-        const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'product-edit'; edit.textContent = '수정'; edit.addEventListener('click', () => openProductEditor(product));
-        const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'product-delete'; remove.textContent = '삭제';
-        remove.addEventListener('click', async () => {
-          if (!confirm(product.name + '을(를) 위시리스트에서 삭제할까요?')) return;
-          remove.disabled = true;
-          const {error} = await window.giftoDb.from('wishlist_items').delete().eq('id', product.dbId);
-          if (error) { remove.disabled = false; showToast('상품을 삭제하지 못했어요.'); return; }
-          await hydrateMyRemoteWishlist(); showToast('상품을 삭제했어요.');
+      if (action) {
+        action.href = 'participants.html?product=' + encodeURIComponent(product.id);
+        action.textContent = '참여 보기';
+        action.addEventListener('click', () => {
+          sessionStorage.setItem('gifto-mypage-scroll-y', String(window.scrollY));
+          sessionStorage.setItem('gifto-participants-from-mypage', '1');
         });
-        remoteAction.append(edit, remove);
       }
-      card.append(remoteAction);
+      const actions = document.createElement('div'); actions.className = 'product-actions';
+      const status = product.status || 'draft';
+      if (status === 'draft') {
+        const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'product-edit'; edit.textContent = '수정'; edit.addEventListener('click', () => openProductEditor(product));
+        const publish = document.createElement('button'); publish.type = 'button'; publish.className = 'product-close'; publish.textContent = '공개 시작'; publish.addEventListener('click', () => publishProduct(product));
+        actions.append(edit, publish);
+      } else if (status === 'open') {
+        const editPhoto = document.createElement('button'); editPhoto.type = 'button'; editPhoto.className = 'product-edit'; editPhoto.textContent = '수정'; editPhoto.addEventListener('click', () => openProductEditor(product));
+        const close = document.createElement('button'); close.type = 'button'; close.className = 'product-close'; close.textContent = '마감'; close.addEventListener('click', () => closeProduct(product));
+        actions.append(editPhoto, close);
+      } else if (status === 'closed') {
+        const state = document.createElement('button'); state.type = 'button'; state.className = 'product-delete is-locked'; state.textContent = '마감됨'; state.disabled = true;
+        const proof = document.createElement('a'); proof.className = 'product-close product-proof-link'; proof.href = 'thankyou.html?product=' + encodeURIComponent(product.id); proof.textContent = '인증 남기기';
+        actions.append(state, proof);
+      } else {
+        const state = document.createElement('button'); state.type = 'button'; state.className = 'product-delete is-locked'; state.textContent = '인증 완료'; state.disabled = true;
+        const proof = document.createElement('a'); proof.className = 'product-edit product-proof-link'; proof.href = 'thankyou.html?product=' + encodeURIComponent(product.id); proof.textContent = '인증 보기';
+        actions.append(state, proof);
+      }
+      card.append(actions);
       return;
     }
     const actions = document.createElement('div'); actions.className = 'product-actions';
@@ -464,20 +615,21 @@ function setupWishlistEditing() {
 }
 function openProductEditor(product) {
   let pendingImage = product.imageUrl || '';
+  const photoOnly = (product.status || 'draft') !== 'draft';
   const layer = document.createElement('div');
   layer.className = 'product-editor-layer';
   layer.innerHTML = `<section class="product-editor" role="dialog" aria-modal="true" aria-labelledby="product-editor-title">
-    <div class="product-editor-heading"><h2 id="product-editor-title">상품 수정</h2><button type="button" aria-label="닫기" data-close-editor>×</button></div>
-    <label class="field-label" for="edit-product-name">상품 이름</label><input id="edit-product-name" class="text-field" value="${escapeHtml(product.name)}" />
-    <label class="field-label" for="edit-product-price">가격</label><input id="edit-product-price" class="text-field" inputmode="numeric" type="number" min="1" value="${Number(product.price) || ''}" />
-    <label class="field-label" for="edit-product-url">상품 링크 <span class="optional">선택</span></label><input id="edit-product-url" class="text-field" type="url" value="${escapeHtml(product.productUrl || '')}" placeholder="https://..." />
+    <div class="product-editor-heading"><h2 id="product-editor-title">${photoOnly ? '상품 사진 수정' : '상품 수정'}</h2><button type="button" aria-label="닫기" data-close-editor>×</button></div>
+    ${photoOnly ? `<p class="field-help">공개 후에는 상품 사진만 수정할 수 있어요.</p><div class="editor-product-summary"><strong>${escapeHtml(product.name)}</strong><span>${won(product.price)}</span></div>` : `<label class="field-label" for="edit-product-name">상품 이름</label><input id="edit-product-name" class="text-field" value="${escapeHtml(product.name)}" /><label class="field-label" for="edit-product-price">가격</label><input id="edit-product-price" class="text-field" inputmode="numeric" type="text" value="${Number(product.price) ? Number(product.price).toLocaleString('ko-KR') : ''}" placeholder="예: 100,000" />`}
     <label class="field-label">상품 사진 <span class="optional">선택</span></label><button type="button" class="photo-picker" data-editor-photo-picker>🖼 사진첩에서 고르기</button><input id="edit-product-photo" class="sr-only" type="file" accept="image/*" />
     <p class="field-help" data-editor-photo-status>새 사진을 선택하면 저장 전에 미리 볼 수 있어요.</p>
     <img class="product-photo-preview" data-editor-photo-preview ${pendingImage ? `src="${escapeHtml(pendingImage)}"` : ''} alt="상품 사진 미리보기" ${pendingImage ? '' : 'hidden'} />
     <button type="button" class="button button-ghost" data-remove-background ${pendingImage ? '' : 'hidden'}>배경 제거 미리보기</button><div class="background-preview" data-background-preview hidden><img alt="배경 제거 결과" /><div><button type="button" data-apply-background>적용</button><button type="button" data-cancel-background>원본 유지</button></div></div>
-    <button type="button" class="button button-primary" data-save-product>수정 저장</button>
+    <button type="button" class="button button-primary" data-save-product>${photoOnly ? '사진 저장' : '수정 저장'}</button>
+    ${product.dbId && (product.status || 'draft') === 'draft' ? '<button type="button" class="editor-delete" data-delete-product>이 상품 삭제</button>' : ''}
   </section>`;
   const close = () => layer.remove();
+  if (!photoOnly) setupMoneyInput(layer.querySelector('#edit-product-price'));
   layer.addEventListener('click', event => { if (event.target === layer) close(); });
   layer.querySelector('[data-close-editor]').addEventListener('click', close);
   const photoInput = layer.querySelector('#edit-product-photo');
@@ -506,24 +658,29 @@ function openProductEditor(product) {
     });
   }
   layer.querySelector('[data-save-product]').addEventListener('click', async () => {
-    const name = layer.querySelector('#edit-product-name').value.trim();
-    const price = Number(layer.querySelector('#edit-product-price').value);
-    const url = layer.querySelector('#edit-product-url').value.trim();
+    const name = photoOnly ? product.name : layer.querySelector('#edit-product-name').value.trim();
+    const price = photoOnly ? product.price : parseMoney(layer.querySelector('#edit-product-price').value);
     if (!name || !Number.isFinite(price) || price <= 0) { showToast('상품 이름과 0원보다 큰 가격을 입력해 주세요.'); return; }
-    if (url) { try { const parsed = new URL(url); if (parsed.protocol !== 'https:') throw new Error(); } catch { showToast('상품 링크는 https:// 주소로 넣어 주세요.'); return; } }
-    product.name = name; product.price = price; product.productUrl = url; product.imageUrl = pendingImage;
+    product.name = name; product.price = price; product.productUrl = ''; product.imageUrl = pendingImage;
     try {
       if (product.dbId) {
-        const {error} = await window.giftoDb.from('wishlist_items').update({name, price, product_url:url || null, image_url:pendingImage || null}).eq('id', product.dbId);
+        const {error} = await window.giftoDb.from('wishlist_items').update(photoOnly ? {image_url:pendingImage || null} : {name, price, product_url:null, image_url:pendingImage || null}).eq('id', product.dbId);
         if (error) throw error;
         await hydrateMyRemoteWishlist();
       } else { saveProducts(appData.products); renderProducts(); setupWishlistEditing(); }
-      close(); showToast('상품 정보를 수정했어요.');
+      close(); showToast(photoOnly ? '상품 사진을 수정했어요.' : '상품 정보를 수정했어요.');
     }
     catch { showToast('저장하지 못했어요. 브라우저 저장공간을 확인해 주세요.'); }
   });
+  layer.querySelector('[data-delete-product]')?.addEventListener('click', async () => {
+    if (!confirm(product.name + '을(를) 위시리스트에서 삭제할까요?')) return;
+    const remove = layer.querySelector('[data-delete-product]'); remove.disabled = true; remove.textContent = '삭제 중…';
+    const {error} = await window.giftoDb.from('wishlist_items').delete().eq('id', product.dbId).eq('status', 'draft');
+    if (error) { remove.disabled = false; remove.textContent = '이 상품 삭제'; showToast('상품을 삭제하지 못했어요.'); return; }
+    close(); await hydrateMyRemoteWishlist(); showToast('상품을 삭제했어요.');
+  });
   document.body.append(layer);
-  layer.querySelector('#edit-product-name').focus();
+  (photoOnly ? layer.querySelector('[data-editor-photo-picker]') : layer.querySelector('#edit-product-name')).focus();
 }
 async function removeProductBackground(image) {
   if (!image.startsWith('data:image/')) throw new Error('직접 올린 사진에서만 배경 제거를 사용할 수 있어요.');
@@ -534,10 +691,100 @@ async function removeProductBackground(image) {
   if (!data?.image) throw new Error(data?.message || '배경을 지우지 못했어요.');
   return data.image;
 }
+async function publishProduct(product) {
+  if (!confirm('공개를 시작할까요? 공개 후에는 상품 정보 수정과 삭제는 할 수 없고, 사진만 바꿀 수 있어요.')) return;
+  const {error} = await window.giftoDb.from('wishlist_items').update({status:'open', shared_at:new Date().toISOString()}).eq('id', product.dbId).eq('status', 'draft');
+  if (error) { showToast('공개를 시작하지 못했어요.'); return; }
+  await hydrateMyRemoteWishlist();
+  showToast('공개를 시작했어요. 이제 친구가 함께할 수 있어요.');
+}
+async function closeProduct(product) {
+  if (!confirm('목표 금액이 모두 모이지 않아도 마감할 수 있어요. 이 상품을 마감할까요?')) return;
+  const {error} = await window.giftoDb.from('wishlist_items').update({status:'closed', closed_at:new Date().toISOString()}).eq('id', product.dbId).eq('status', 'open');
+  if (error) { showToast('마감하지 못했어요.'); return; }
+  await hydrateMyRemoteWishlist();
+  showToast('마감했어요. 선물을 준비한 뒤 인증을 남겨 주세요.');
+}
+async function setupThankYou() {
+  const upload = document.querySelector('[data-photo-upload]');
+  if (!upload || !window.giftoDb) return;
+  const itemId = new URLSearchParams(location.search).get('product');
+  if (!isUuid(itemId)) { upload.closest('.thankyou').innerHTML = '<div class="empty-state">인증할 상품을 찾지 못했어요.</div>'; return; }
+  const [{data:item}, {data:auth}] = await Promise.all([
+    window.giftoDb.from('wishlist_items').select('id,name,wishlist_id,status,proof_image_url,proof_message').eq('id', itemId).single(),
+    window.giftoDb.auth.getSession()
+  ]);
+  if (!item) { upload.closest('.thankyou').innerHTML = '<div class="empty-state">선물 인증을 불러오지 못했어요.</div>'; return; }
+  const {data:list} = await window.giftoDb.from('wishlists').select('owner_id').eq('id', item.wishlist_id).single();
+  const isOwner = !!auth.session && list?.owner_id === auth.session.user.id;
+  if (!isOwner) {
+    if (item.status !== 'proof_posted') { upload.closest('.thankyou').innerHTML = '<div class="empty-state">아직 선물 인증을 준비하고 있어요.</div>'; return; }
+    upload.closest('.thankyou').innerHTML = `<p class="eyebrow">GIFT STORY</p><h1>${escapeHtml(item.name)}</h1><img class="proof-image" src="${escapeHtml(item.proof_image_url)}" alt="선물 인증 사진" /><div class="thanks-preview"><div class="avatar avatar-blue">G</div><div><strong>함께해 준 마음에 감사해요</strong><p>${escapeHtml(item.proof_message || '')}</p></div></div>`;
+    return;
+  }
+  if (!['closed', 'proof_posted'].includes(item.status)) { upload.closest('.thankyou').innerHTML = '<div class="empty-state">마감한 내 상품에서만 선물 인증을 남길 수 있어요.</div>'; return; }
+  document.querySelector('[data-thankyou-product]').textContent = item.name;
+  const message = document.querySelector('#thanks');
+  message.value = item.proof_message || '다들 고마워! 정말 잘 쓸게. 💙';
+  const file = document.querySelector('#thanks-photo');
+  const photoStatus = document.querySelector('[data-thanks-photo-status]');
+  let imageUrl = item.proof_image_url || '';
+  const refreshPhoto = () => {
+    if (!imageUrl) return;
+    upload.classList.add('uploaded');
+    upload.querySelector('span').textContent = '✓';
+    upload.querySelector('strong').textContent = '선물 사진이 준비됐어요';
+  };
+  refreshPhoto();
+  upload.addEventListener('click', () => file.click());
+  file.addEventListener('change', async () => {
+    const chosen = file.files[0]; if (!chosen) return;
+    photoStatus.textContent = '사진 크기를 줄이고 있어요…';
+    try { const result = await compressProductPhoto(chosen); imageUrl = result.url; refreshPhoto(); photoStatus.textContent = '사진 준비 완료'; }
+    catch (error) { photoStatus.textContent = error.message || '사진을 읽지 못했어요.'; }
+  });
+  const save = document.querySelector('[data-thanks-submit]');
+  save.addEventListener('click', async () => {
+    if (!imageUrl) { showToast('선물 사진을 한 장 남겨 주세요.'); return; }
+    const text = message.value.trim(); if (!text) { showToast('감사 메시지를 적어 주세요.'); return; }
+    save.disabled = true; save.textContent = '인증 저장 중…';
+    const {error} = await window.giftoDb.from('wishlist_items').update({status:'proof_posted', proof_image_url:imageUrl, proof_message:text, proof_published_at:new Date().toISOString()}).eq('id', item.id);
+    if (error) { save.disabled = false; save.textContent = '인증 저장하고 공유하기'; showToast('인증을 저장하지 못했어요.'); return; }
+    const {count} = await window.giftoDb.from('contributions').select('id', {count:'exact', head:true}).eq('item_id', item.id).eq('status', 'confirmed');
+    const preview = document.querySelector('.thanks-preview');
+    preview.hidden = false; preview.querySelector('strong').textContent = item.name + ' 선물 인증'; preview.querySelector('p').textContent = text; preview.querySelector('span').textContent = `함께해 준 ${count || 0}명에게 감사 링크를 보낼 수 있어요.`;
+    save.disabled = false; save.textContent = '카카오톡으로 감사 링크 공유';
+    save.onclick = async () => {
+      const url = new URL('wishlist.html?owner=' + encodeURIComponent(auth.session.user.id), location.href).href;
+      const shareText = `${item.name} 선물이 도착했어요 🎁\n${text}\n${url}`;
+      if (navigator.share) {
+        try { await navigator.share({title:'GIFTO 선물 인증', text:shareText, url}); return; }
+        catch (shareError) { if (shareError?.name === 'AbortError') return; }
+      }
+      try { await navigator.clipboard.writeText(shareText); showToast('감사 메시지와 링크를 복사했어요. 카카오톡에 붙여넣어 주세요.'); }
+      catch { showToast('카카오톡으로 보낼 링크를 준비하지 못했어요.'); }
+    };
+    showToast('선물 인증을 저장했어요.');
+  });
+}
 async function setupParticipants() {
   const view = document.querySelector('[data-participants]');
+  const page = document.querySelector('[data-participants-page]');
   if (!view) return;
-  const id = new URLSearchParams(location.search).get('product');
+  const params = new URLSearchParams(location.search);
+  const id = params.get('product');
+  const cameFromHome = params.get('from') === 'home' || sessionStorage.getItem('gifto-participants-from-home') === '1' || document.referrer.includes('/index.html');
+  const cameFromMyPage = sessionStorage.getItem('gifto-participants-from-mypage') === '1' || document.referrer.includes('/pages/my-page.html');
+  if (cameFromHome || cameFromMyPage) {
+    const back = document.querySelector('.topbar .back');
+    if (back) back.addEventListener('click', event => {
+      event.preventDefault();
+      if (history.length > 1) history.back();
+      else location.href = cameFromHome ? '../index.html' : 'my-page.html';
+    });
+    sessionStorage.removeItem('gifto-participants-from-home');
+    sessionStorage.removeItem('gifto-participants-from-mypage');
+  }
   if (!isUuid(id)) {
     const product = appData.products.find(item => item.id === id) || appData.products[0];
     const contributors = product?.contributors || [];
@@ -545,30 +792,38 @@ async function setupParticipants() {
     document.querySelector('[data-participant-total]').textContent = won(product?.raised || 0);
     document.querySelector('[data-participant-count]').textContent = contributors.length + '명 참여';
     view.innerHTML = contributors.length ? contributors.map(item => '<li><span class="contributor-avatar">' + escapeHtml(item.name).slice(0, 1) + '</span><strong>' + escapeHtml(item.name) + '</strong><span>' + won(item.amount) + '</span></li>').join('') : '<li class="empty-contributors">아직 함께한 친구가 없어요.</li>';
+    if (page) page.hidden = false;
     return;
   }
   try {
-    const {data: item, error: itemError} = await window.giftoDb.from('wishlist_items').select('id,name,price,wishlist_id').eq('id', id).single();
+    const {data: item, error: itemError} = await window.giftoDb.from('wishlist_items').select('id,wishlist_id').eq('id', id).single();
     if (itemError || !item) throw new Error('ITEM_NOT_FOUND');
-    const [{data: list}, {data: contributions}, {data: auth}] = await Promise.all([
-      window.giftoDb.from('wishlists').select('owner_id').eq('id', item.wishlist_id).single(),
-      window.giftoDb.from('contributions').select('id,contributor_name,amount,status,created_at').eq('item_id', id).order('created_at'),
-      window.giftoDb.auth.getSession()
-    ]);
-    const isOwner = auth.session?.user.id === list?.owner_id;
-    const confirmed = (contributions || []).filter(entry => entry.status === 'confirmed');
-    document.querySelector('[data-participant-product]').textContent = item.name;
+    const {data: wishlist, error: wishlistError} = await window.giftoDb.from('wishlists').select('owner_id').eq('id', item.wishlist_id).single();
+    if (wishlistError || !wishlist?.owner_id) throw new Error('WISHLIST_NOT_FOUND');
+    clearRemoteWishlist(wishlist.owner_id);
+    const remote = await loadRemoteWishlist(wishlist.owner_id);
+    const product = remote.products.find(entry => entry.id === id);
+    if (!product) throw new Error('PRODUCT_NOT_FOUND');
+    const contributions = (product.allContributions || []).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    const confirmed = contributions.filter(entry => entry.status === 'confirmed');
+    const raised = confirmed.reduce((sum, entry) => sum + entry.amount, 0);
+    const percent = product.price ? Math.min(100, Math.round(raised / product.price * 100)) : 0;
+    document.querySelector('[data-participant-product]').textContent = product.name;
     document.querySelector('[data-participant-total]').textContent = won(confirmed.reduce((sum, entry) => sum + entry.amount, 0));
     document.querySelector('[data-participant-count]').textContent = confirmed.length + '명 참여';
-    view.innerHTML = (contributions || []).length ? (contributions || []).map(entry => `<li><span class="contributor-avatar">${escapeHtml(entry.contributor_name).slice(0,1)}</span><strong>${escapeHtml(entry.contributor_name)}</strong><span>${won(entry.amount)}</span>${entry.status === 'pending' ? `<em class="contribution-pending">입금 확인 대기</em>${isOwner ? `<button type="button" class="confirm-contribution" data-confirm-contribution="${entry.id}">받았어요</button>` : ''}` : '<em class="contribution-confirmed">확인 완료</em>'}</li>`).join('') : '<li class="empty-contributors">아직 함께한 친구가 없어요.</li>';
-    view.querySelectorAll('[data-confirm-contribution]').forEach(button => button.addEventListener('click', async () => {
-      button.disabled = true; button.textContent = '확인 중…';
-      const {error} = await window.giftoDb.from('contributions').update({status:'confirmed', confirmed_at:new Date().toISOString()}).eq('id', button.dataset.confirmContribution).eq('status', 'pending');
-      if (error) { button.disabled = false; button.textContent = '받았어요'; showToast('입금 확인을 처리하지 못했어요.'); return; }
-      announceContributionChange(list.owner_id); await setupParticipants(); showToast('입금을 확인했어요. 진행률에 반영됐어요.');
-    }));
-  } catch {
-    view.innerHTML = '<li class="empty-contributors">참여 내역을 불러오지 못했어요.</li>';
+    const card = document.querySelector('[data-participant-card]');
+    if (card) card.innerHTML = `<div class="participant-product-image" style="--image-bg:${escapeHtml(product.color || '#f2f7ff')}">${escapeHtml(product.emoji || '🎁')}${product.imageUrl ? `<img src="${escapeHtml(product.imageUrl)}" alt="${escapeHtml(product.name)}" />` : ''}</div><div><p>선물 목표 금액</p><strong>${won(product.price)}</strong><span>${won(raised)} 모임 · ${percent}% 달성</span><div class="progress"><i style="width:${percent}%"></i></div></div>`;
+    view.innerHTML = contributions.length ? contributions.map(entry => {
+      const confirmedDate = entry.confirmed_at ? new Date(entry.confirmed_at) : null;
+      const dateLabel = confirmedDate && !Number.isNaN(confirmedDate.getTime()) ? (confirmedDate.getMonth() + 1) + '월 ' + confirmedDate.getDate() + '일 확인' : '확인 완료';
+      const state = entry.status === 'pending' ? '<em class="contribution-pending">입금 확인 대기</em>' : '<em class="contribution-confirmed">' + dateLabel + '</em>';
+      return '<li><span class="contributor-avatar">' + escapeHtml(entry.contributor_name).slice(0,1) + '</span><strong>' + escapeHtml(entry.contributor_name) + '</strong><span>' + won(entry.amount) + '</span>' + state + '</li>';
+    }).join('') : '<li class="empty-contributors">아직 함께한 친구가 없어요.</li>';
+    if (page) page.hidden = false;
+  } catch (error) {
+    console.error('GIFTO participants failed to load', error);
+    view.innerHTML = '<li class="empty-contributors">참여 내역을 불러오지 못했어요. 새로고침 후 다시 확인해 주세요.</li>';
+    if (page) page.hidden = false;
   }
 }
 async function setupPendingConfirmations() {
@@ -578,13 +833,16 @@ async function setupPendingConfirmations() {
   const render = async () => {
     const {data: auth} = await window.giftoDb.auth.getSession();
     if (!auth.session) { section.hidden = true; badge?.setAttribute('hidden', ''); return; }
-    const {data: lists, error: listError} = await window.giftoDb.from('wishlists').select('id').eq('owner_id', auth.session.user.id);
-    if (listError || !(lists || []).length) { section.hidden = true; badge?.setAttribute('hidden', ''); return; }
-    const {data: items, error: itemError} = await window.giftoDb.from('wishlist_items').select('id,name').in('wishlist_id', lists.map(list => list.id));
-    if (itemError || !(items || []).length) { section.hidden = true; badge?.setAttribute('hidden', ''); return; }
+    // Public wishlist data is readable even when an old browser session cannot
+    // resolve the owner's item list through the chained RLS query.
+    clearRemoteWishlist(auth.session.user.id);
+    const remote = await loadRemoteWishlist(auth.session.user.id);
+    const items = remote.products || [];
     const itemById = new Map(items.map(item => [item.id, item]));
-    const {data: rows, error: contributionError} = await window.giftoDb.from('contributions').select('id,item_id,contributor_name,amount,created_at').in('item_id', items.map(item => item.id)).eq('status', 'pending').order('created_at');
-    if (contributionError || !(rows || []).length) { section.hidden = true; badge?.setAttribute('hidden', ''); return; }
+    const rows = items.flatMap(item => (item.allContributions || [])
+      .filter(entry => entry.status === 'pending')
+      .map(entry => ({...entry, item_id:item.id})));
+    if (!rows.length) { section.hidden = true; badge?.setAttribute('hidden', ''); return; }
     section.hidden = false;
     badge?.removeAttribute('hidden');
     badge.textContent = String(rows.length);
@@ -597,6 +855,34 @@ async function setupPendingConfirmations() {
     }));
   };
   try { await render(); } catch { section.hidden = true; badge?.setAttribute('hidden', ''); }
+}
+async function setupHomePendingBadge() {
+  const badge = document.querySelector('.pending-anchor [data-pending-badge]');
+  if (!badge || !window.giftoDb) return;
+  try {
+    const {data: auth} = await window.giftoDb.auth.getSession();
+    if (!auth.session) return;
+    clearRemoteWishlist(auth.session.user.id);
+    const remote = await loadRemoteWishlist(auth.session.user.id);
+    const count = remote.products.reduce((sum, item) => sum + (item.allContributions || []).filter(entry => entry.status === 'pending').length, 0);
+    if (count) { badge.textContent = String(count); badge.removeAttribute('hidden'); }
+  } catch {}
+}
+async function paintPendingConfirmationSection(products, owner) {
+  const section = document.querySelector('[data-pending-confirmations]');
+  if (!section) return;
+  const rows = (products || []).flatMap(item => (item.allContributions || [])
+    .filter(entry => entry.status === 'pending')
+    .map(entry => ({...entry, item})));
+  if (!rows.length) { section.hidden = true; return; }
+  section.hidden = false;
+  section.innerHTML = `<div class="section-heading"><div><p class="eyebrow">입금 확인</p><h2>확인할 송금 <span class="count">${rows.length}</span></h2></div></div><p class="settings-copy">실제 입금을 확인한 뒤 ‘받았어요’를 눌러 주세요.</p><ul class="pending-confirmation-list">${rows.map(row => `<li><span class="contributor-avatar">${escapeHtml(row.contributor_name).slice(0,1)}</span><div><strong>${escapeHtml(row.contributor_name)}님이 ${escapeHtml(row.item.name)}에 함께했어요</strong><small>${won(row.amount)} · 입금 확인 대기</small></div><button type="button" class="confirm-contribution" data-confirm-pending="${row.id}">받았어요</button></li>`).join('')}</ul>`;
+  section.querySelectorAll('[data-confirm-pending]').forEach(button => button.addEventListener('click', async () => {
+    button.disabled = true; button.textContent = '확인 중…';
+    const {error} = await window.giftoDb.from('contributions').update({status:'confirmed', confirmed_at:new Date().toISOString()}).eq('id', button.dataset.confirmPending).eq('status', 'pending');
+    if (error) { button.disabled = false; button.textContent = '받았어요'; showToast('입금 확인을 처리하지 못했어요.'); return; }
+    announceContributionChange(owner); await hydrateMyRemoteWishlist(); showToast('입금을 확인했어요. 진행률에 반영됐어요.');
+  }));
 }
 async function hydrateMyRemoteWishlist() {
   const list = document.querySelector('[data-product-list][data-editable="true"]');
@@ -616,6 +902,12 @@ async function hydrateMyRemoteWishlist() {
     appData.products = remote.products.map(product => ({...product, imageUrl: product.imageUrl || localPhotoByName.get(productKey(product.name)) || ''}));
     renderProducts();
     setupWishlistEditing();
+    await paintPendingConfirmationSection(remote.products, auth.session.user.id);
+    const savedScroll = Number(sessionStorage.getItem('gifto-mypage-scroll-y'));
+    if (Number.isFinite(savedScroll) && savedScroll > 0) {
+      sessionStorage.removeItem('gifto-mypage-scroll-y');
+      requestAnimationFrame(() => window.scrollTo(0, savedScroll));
+    }
   } catch {
     // A first-time user has no cloud wishlist yet, so local drafts remain visible.
   }
@@ -656,7 +948,7 @@ async function setupPublicProfile() {
     activeProfile.name = name;
     activeProfile.paymentInfo = {kakaoQr:profile.kakao_pay_qr_url || '', kakaoUrl:profile.kakao_pay_url || ''};
     avatar.textContent = Array.from(name)[0];
-    if (/^https?:\/\//i.test(profile.avatar_url || '')) {
+    if (/^(https?:\/\/|data:image\/)/i.test(profile.avatar_url || '')) {
       const image = document.createElement('img'); image.alt = name + ' 프로필 사진';
       image.addEventListener('error', () => { avatar.textContent = Array.from(name)[0]; });
       image.src = profile.avatar_url; avatar.replaceChildren(image);
@@ -703,16 +995,33 @@ function setupFriendList() {
       const emoji = document.createElement('em'); emoji.textContent = profile.eventEmoji; card.append(avatar, details, emoji); list.append(card);
     });
 }
+function setupWishlistCategory() {
+  const picker = document.querySelector('[data-category-picker]');
+  if (!picker) return () => 'birthday';
+  const title = document.querySelector('#list-title');
+  const note = document.querySelector('#list-note');
+  let selected = localStorage.getItem('gifto-draft-category') || 'birthday';
+  const apply = category => {
+    selected = GIFT_CATEGORIES[category] ? category : 'birthday';
+    localStorage.setItem('gifto-draft-category', selected);
+    picker.querySelectorAll('button').forEach(button => button.classList.toggle('selected', button.dataset.category === selected));
+    const template = GIFT_CATEGORIES[selected];
+    if (title && !title.dataset.userEdited) title.value = template.title;
+    if (note && !note.dataset.userEdited) note.value = template.note;
+  };
+  note?.addEventListener('input', () => { note.dataset.userEdited = 'true'; });
+  picker.querySelectorAll('button').forEach(button => button.addEventListener('click', () => apply(button.dataset.category)));
+  apply(selected);
+  return () => selected;
+}
 function setupCreateWishlist() {
   const addButton = document.querySelector('[data-add-product]');
   if (!addButton) return;
+  const getCategory = setupWishlistCategory();
   let selectedEmoji = '🎁';
   let uploadedPhoto = '';
-  let linkPhoto = '';
-  let previewedLink = '';
-  let linkBusy = false;
   let photoBusy = false;
-  const updatePhotoButtons = () => { addButton.disabled = linkBusy || photoBusy; };
+  const updatePhotoButtons = () => { addButton.disabled = photoBusy; };
   let photoVersion = 0;
   const photoInput = document.querySelector('#new-product-photo');
   const photoPreview = document.querySelector('[data-product-photo-preview]');
@@ -740,33 +1049,11 @@ function setupCreateWishlist() {
       if (version === photoVersion) { photoInput.value = ''; photoStatus.textContent = error.message; }
     } finally { if (version === photoVersion) { photoBusy = false; updatePhotoButtons(); } }
   });
-  const name = document.querySelector('#new-product-name'); const productUrl = document.querySelector('#new-product-url');
-  const linkStatus = document.querySelector('[data-link-photo-status]');
-  const fetchPhoto = document.querySelector('[data-fetch-product-photo]');
-  const loadLinkPhoto = async () => {
-    if (linkBusy) return;
-    const value = productUrl.value.trim();
-    if (!value) return;
-    linkBusy = true; fetchPhoto.disabled = true; updatePhotoButtons();
-    linkStatus.textContent = '상품 링크에서 대표 이미지를 확인하고 있어요…';
-    try {
-      const result = await getProductPreview(value);
-      if (productUrl.value.trim() !== value) return;
-      previewedLink = value; linkPhoto = result.imageUrl || '';
-      if (!name.value.trim() && result.title) name.value = result.title;
-      if (linkPhoto && !uploadedPhoto) { photoPreview.src = linkPhoto; photoPreview.hidden = false; }
-      linkStatus.textContent = linkPhoto ? '대표 이미지를 가져왔어요. 직접 올린 사진이 있으면 그 사진을 사용해요.' : '대표 사진을 찾지 못했어요. 아래에서 사진을 직접 올려 주세요.';
-    } catch (error) {
-      if (productUrl.value.trim() === value) linkStatus.textContent = error.message;
-    } finally { linkBusy = false; fetchPhoto.disabled = false; updatePhotoButtons(); }
-  };
-  fetchPhoto.addEventListener('click', loadLinkPhoto);
-  productUrl.addEventListener('input', () => { linkPhoto = ''; previewedLink = ''; if (!uploadedPhoto) { photoPreview.hidden = true; photoPreview.removeAttribute('src'); } });
-  productUrl.addEventListener('change', loadLinkPhoto);
-  photoPreview.addEventListener('error', () => { photoPreview.hidden = true; if (!uploadedPhoto) { linkPhoto = ''; linkStatus.textContent = '쇼핑몰에서 사진 표시를 막았어요. 직접 사진을 올려 주세요.'; } });
+  const name = document.querySelector('#new-product-name');
   const price = document.querySelector('#new-product-price');
+  setupMoneyInput(price);
   const draftList = document.querySelector('[data-draft-products]');
-  const showDrafts = () => { draftList.innerHTML = appData.products.map(item => `<div class="draft-product">${item.imageUrl ? `<img width="48" height="48" style="object-fit:contain" src="${escapeHtml(item.imageUrl)}" alt="${escapeHtml(item.name)}" />` : `<span>${escapeHtml(item.emoji)}</span>`}<strong>${escapeHtml(item.name)}</strong><small>${won(item.price)}</small></div>`).join(''); };
+  const showDrafts = () => { draftList.innerHTML = appData.products.map(item => `<div class="draft-product">${item.imageUrl ? `<img class="draft-product-thumb" src="${escapeHtml(item.imageUrl)}" alt="${escapeHtml(item.name)}" />` : `<span class="draft-product-thumb draft-product-emoji">${escapeHtml(item.emoji)}</span>`}<strong>${escapeHtml(item.name)}</strong><small>${won(item.price)}</small></div>`).join(''); };
   showDrafts();
   (async () => {
     const {data: auth} = await window.giftoDb.auth.getSession();
@@ -786,14 +1073,14 @@ function setupCreateWishlist() {
     button.classList.add('selected'); selectedEmoji = button.dataset.emoji;
   }));
   addButton.addEventListener('click', async () => {
-    const productName = name.value.trim(); const productPrice = Number(price.value);
+    const productName = name.value.trim(); const productPrice = parseMoney(price.value);
     if (!productName || !Number.isFinite(productPrice) || productPrice <= 0) { showToast('상품 이름과 0원보다 큰 가격을 입력해 주세요.'); return; }
     addButton.textContent = '대표 이미지 확인 중…'; addButton.disabled = true;
-    const imageUrl = uploadedPhoto || (previewedLink === productUrl.value.trim() ? linkPhoto : '');
-    const nextProducts = [...appData.products, { id: `custom-${Date.now()}`, name: productName, price: productPrice, raised: 0, supporters: 0, emoji: selectedEmoji, color: '#f2f7ff', productUrl: productUrl.value.trim(), imageUrl }];
+    const imageUrl = uploadedPhoto;
+    const nextProducts = [...appData.products, { id: `custom-${Date.now()}`, name: productName, price: productPrice, raised: 0, supporters: 0, emoji: selectedEmoji, color: '#f2f7ff', productUrl: '', imageUrl }];
     try { saveProducts(nextProducts); }
     catch { showToast('브라우저 저장공간이 부족해요. 입력한 내용은 유지했어요.'); addButton.disabled = false; addButton.textContent = '상품 목록에 추가'; return; }
-    appData.products = nextProducts; name.value = ''; price.value = ''; productUrl.value = ''; clearPhoto(); showDrafts();
+    appData.products = nextProducts; name.value = ''; price.value = ''; clearPhoto(); showDrafts();
     addButton.textContent = imageUrl ? '이미지와 함께 추가됐어요 ✓' : '아이콘으로 추가됐어요 ✓'; addButton.disabled = false; setTimeout(() => { addButton.textContent = '상품 목록에 추가'; }, 1500);
   });
   document.querySelector('[data-save-wishlist]').addEventListener('click', async event => {
@@ -802,8 +1089,11 @@ function setupCreateWishlist() {
       const {data, error} = await window.giftoDb.auth.getSession();
       if (error || !data.session) { location.href = 'login.html'; return; }
       const saveButton = event.currentTarget; saveButton.classList.add('is-disabled'); saveButton.textContent = '저장 중…';
-      const details = {title:document.querySelector('#list-title').value.trim(), note:document.querySelector('#list-note').value.trim()};
+      const details = {title:document.querySelector('#list-title').value.trim(), note:document.querySelector('#list-note').value.trim(), category:getCategory()};
+      localStorage.setItem('gifto-wishlist-details:' + data.session.user.id, JSON.stringify(details));
       const wishlist = await getOrCreateOwnWishlist(data.session.user, details);
+      // Older projects can still save while the category migration is waiting to run.
+      await window.giftoDb.from('wishlists').update({category:details.category}).eq('id', wishlist.id);
       const drafts = appData.products.filter(product => !product.dbId);
       if (drafts.length) {
         const {data: added, error: itemError} = await window.giftoDb.from('wishlist_items').insert(drafts.map((product, position) => ({
@@ -855,9 +1145,9 @@ async function getProductPreview(url) {
   }
   return data || {};
 }
-setupFriendList(); setupPublicProfile(); renderProducts(); setupWishlistEditing(); setupContribution(); setupSmallInteractions(); setupPaymentSettings(); setupBirthdaySettings(); setupPendingConfirmations(); setupCreateWishlist(); setupKakaoLogin(); hydrateMyRemoteWishlist(); setupHomeWishlistStatus();
+setupFriendList(); setupPublicProfile(); renderProducts(); setupWishlistEditing(); setupContribution(); setupParticipants(); setupPaymentSettings(); setupBirthdaySettings(); setupDisplayName(); setupProfileAvatar(); setupProfileEdit(); setupPendingConfirmations(); setupHomePendingBadge(); setupCreateWishlist(); setupKakaoLogin(); hydrateMyRemoteWishlist(); setupHomeWishlistStatus();
 contributionChannel?.addEventListener('message', event => {
-  if (event.data?.type !== 'contribution-confirmed') return;
+  if (!['contribution-confirmed', 'profile-updated'].includes(event.data?.type)) return;
   if (ownerId && event.data.owner === ownerId) setupPublicProfile();
   hydrateMyRemoteWishlist();
 });

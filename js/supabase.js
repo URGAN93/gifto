@@ -27,9 +27,11 @@ function renderAuthNavigation(session) {
 function renderAccountProfile(session) {
   const metadata = session?.user?.user_metadata || {};
   const kakao = session?.user?.identities?.find(identity => identity.provider === 'kakao')?.identity_data || {};
-  const name = [metadata.full_name, metadata.name, metadata.nickname, metadata.preferred_username,
+  const savedName = session ? localStorage.getItem('gifto-display-name:' + session.user.id) : null;
+  const name = savedName || [metadata.full_name, metadata.name, metadata.nickname, metadata.preferred_username,
     kakao.full_name, kakao.name, kakao.nickname].find(value => typeof value === 'string' && value.trim()) || 'GIFTO 사용자';
-  const avatarUrl = [metadata.avatar_url, metadata.picture, kakao.avatar_url, kakao.picture]
+  const savedAvatar = session ? localStorage.getItem('gifto-profile-avatar:' + session.user.id) : null;
+  const avatarUrl = savedAvatar !== null ? savedAvatar : [metadata.avatar_url, metadata.picture, kakao.avatar_url, kakao.picture]
     .find(value => typeof value === 'string' && /^https?:\/\//i.test(value));
   if (session && wishlistTitleInput && wishlistTitleInput.dataset.userEdited !== 'true') {
     wishlistTitleInput.value = name + '의 생일 선물';
@@ -51,6 +53,13 @@ function renderAccountProfile(session) {
 }
 async function restoreAuthNavigation() {
   const { data, error } = await window.giftoDb.auth.getSession();
+  // Remove the one temporary account created during the in-development friend test.
+  // Real users never enter this branch.
+  if (!error && data.session?.user?.id === '0a3a328f-9de4-4137-b76b-72cb29d037f5') {
+    await window.giftoDb.auth.signOut({scope:'local'});
+    location.replace(window.giftoLoginUrl);
+    return;
+  }
   if (!error) renderAuthNavigation(data.session);
 }
 window.giftoDb.auth.onAuthStateChange((_event, session) => renderAuthNavigation(session));

@@ -70,3 +70,14 @@ end;
 $$;
 create trigger on_auth_user_created after insert on auth.users
 for each row execute procedure public.create_profile_for_new_user();
+
+-- Item lifecycle for a fresh database.
+alter table public.wishlist_items
+  add column if not exists status text not null default 'draft' check (status in ('draft', 'open', 'closed', 'proof_posted')),
+  add column if not exists shared_at timestamptz,
+  add column if not exists closed_at timestamptz,
+  add column if not exists proof_image_url text,
+  add column if not exists proof_message text,
+  add column if not exists proof_published_at timestamptz;
+
+alter table public.wishlists add column if not exists category text not null default 'birthday' check (category in ('birthday', 'support', 'celebration', 'housewarming', 'together'));
