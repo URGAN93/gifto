@@ -141,7 +141,7 @@ async function setupContribution() {
   const reportButton = document.querySelector('[data-report-sent]');
   const amountStep = document.querySelector('[data-amount-after-payment]');
   const fallback = document.querySelector('[data-qr-fallback]');
-  const paymentInfo = ownerId === 'seongmin' ? getPaymentInfo() : (activeProfile.paymentInfo || {});
+  const getContributionPaymentInfo = () => ownerId === 'seongmin' ? getPaymentInfo() : (activeProfile.paymentInfo || {});
   const returnKey = 'gifto-returning-from-kakao';
   const showAmountStep = () => { amountStep.hidden = false; fallback.hidden = true; sendButton.hidden = true; input.focus(); };
   if (sessionStorage.getItem(returnKey) === product.id) { sessionStorage.removeItem(returnKey); showAmountStep(); }
@@ -152,6 +152,7 @@ async function setupContribution() {
     if (url && isKakaoPayLink(url)) {
       sessionStorage.setItem(returnKey, product.id);
       location.href = url;
+    const paymentInfo = getContributionPaymentInfo();
       return;
     }
     fallback.innerHTML = '<strong>카카오페이 QR 송금</strong><p>카카오톡에서 코드 스캔을 열고 QR을 스캔해 송금해 주세요. 송금 뒤 이 화면으로 돌아오면 금액을 입력할 수 있어요.</p><img alt="카카오페이 송금 QR 코드" />';
