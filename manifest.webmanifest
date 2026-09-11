@@ -1,0 +1,25 @@
+{
+  "id": "/gifto/",
+  "name": "GIFTO",
+  "short_name": "GIFTO",
+  "description": "마음을 모아 더 특별한 선물을 완성하는 위시리스트",
+  "lang": "ko-KR",
+  "start_url": "/gifto/",
+  "scope": "/gifto/",
+  "display": "standalone",
+  "background_color": "#F8FAFC",
+  "theme_color": "#1677EE",
+  "icons": [
+    {
+      "src": "assets/gifto-pwa-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "assets/gifto-pwa-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
+
