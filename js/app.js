@@ -126,6 +126,7 @@ async function setupContribution() {
       const remote = await loadRemoteWishlist(ownerId);
       activeProfile.name = remote.profile.display_name || 'GIFTO 친구';
       activeProfile.products = remote.products;
+      activeProfile.paymentInfo = {kakaoQr:remote.profile.kakao_pay_qr_url || '', kakaoUrl:remote.profile.kakao_pay_url || ''};
     } catch { selected.innerHTML = '<p class="empty-state">위시리스트를 불러오지 못했어요.</p>'; return; }
   }
   const sourceProducts = ownerId ? activeProfile.products : appData.products;
