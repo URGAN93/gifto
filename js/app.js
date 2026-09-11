@@ -29,7 +29,11 @@ function announceContributionChange(owner) {
 async function loadRemoteWishlist(owner) {
   if (!isUuid(owner)) throw new Error('INVALID_OWNER');
   if (remoteWishlistCache.has(owner)) return remoteWishlistCache.get(owner);
-  const {data: profile, error: profileError} = await window.giftoDb.from('profiles').select('id,display_name,avatar_url').eq('id', owner).single();
+  let {data: profile, error: profileError} = await window.giftoDb.from('profiles').select('id,display_name,avatar_url,kakao_pay_qr_url,kakao_pay_url').eq('id', owner).single();
+  // Keep existing shared links usable until the optional QR-link migration runs.
+  if (profileError?.code === '42703') {
+    ({data: profile, error: profileError} = await window.giftoDb.from('profiles').select('id,display_name,avatar_url,kakao_pay_qr_url').eq('id', owner).single());
+  }
   if (profileError || !profile) throw new Error('PROFILE_NOT_FOUND');
   const {data: wishlist, error: wishlistError} = await window.giftoDb.from('wishlists').select('id,title,note').eq('owner_id', owner).eq('is_public', true).order('created_at', {ascending:false}).limit(1).maybeSingle();
   if (wishlistError || !wishlist) throw new Error('WISHLIST_NOT_FOUND');
@@ -177,17 +181,35 @@ async function reportContribution(product, amount) {
   if (error) throw new Error('송금 완료 처리를 하지 못했어요.');
 }
 async function decodeQrPayload(imageDataUrl) {
-  if (!imageDataUrl || !('BarcodeDetector' in window)) return '';
+  if (!imageDataUrl) return '';
   try {
     const image = new Image();
     await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = reject; image.src = imageDataUrl; });
-    const detector = new BarcodeDetector({formats:['qr_code']});
-    return (await detector.detect(image))[0]?.rawValue || '';
+    if ('BarcodeDetector' in window) {
+      const detector = new BarcodeDetector({formats:['qr_code']});
+      const value = (await detector.detect(image))[0]?.rawValue || '';
+      if (value) return value;
+    }
+    if (!window.jsQR) await new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js';
+      script.onload = resolve; script.onerror = reject; document.head.append(script);
+    });
+    if (!window.jsQR) return '';
+    const canvas = document.createElement('canvas');
+    canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
+    const context = canvas.getContext('2d', {willReadFrequently:true});
+    context.drawImage(image, 0, 0);
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+    return window.jsQR(pixels.data, pixels.width, pixels.height, {inversionAttempts:'attemptBoth'})?.data || '';
   } catch { return ''; }
 }
 function isKakaoPayLink(value) {
-  try { const url = new URL(value); return ['https:','kakaotalk:','kakaopay:'].includes(url.protocol) && /(kakao\.com|kakaopay\.com)$/i.test(url.hostname); }
-  catch { return false; }
+  try {
+    const url = new URL(value);
+    if (['kakaotalk:','kakaopay:'].includes(url.protocol)) return true;
+    return url.protocol === 'https:' && /(^|\.)(kakao\.com|kakaopay\.com)$/i.test(url.hostname);
+  } catch { return false; }
 }
 async function ensureCloudShare(user) {
   let details = {};
@@ -293,9 +315,20 @@ function setupPaymentSettings() {
   kakao.insertAdjacentElement('afterend', help);
   const preview = document.createElement('img'); preview.className = 'payment-qr-preview'; preview.alt = '등록한 카카오페이 송금 QR';
   if (info.kakaoQr) { preview.src = info.kakaoQr; kakao.insertAdjacentElement('afterend', preview); }
-  form.addEventListener('submit', event => {
+  form.addEventListener('submit', async event => {
     event.preventDefault();
-    const save = qr => { savePaymentInfo({ kakaoQr: qr || info.kakaoQr || '' }); showToast('카카오페이 QR을 저장했어요.'); };
+    const save = async qr => {
+      const kakaoQr = qr || info.kakaoQr || '';
+      const decoded = await decodeQrPayload(kakaoQr);
+      const nextInfo = {kakaoQr, kakaoUrl:isKakaoPayLink(decoded) ? decoded : ''};
+      savePaymentInfo(nextInfo);
+      const {data} = await window.giftoDb.auth.getSession();
+      if (data.session) {
+        const {error} = await window.giftoDb.from('profiles').update({kakao_pay_qr_url:kakaoQr || null, kakao_pay_url:nextInfo.kakaoUrl || null}).eq('id', data.session.user.id);
+        if (error) { showToast('QR은 이 기기에 저장됐어요. 공유 저장은 다시 시도해 주세요.'); return; }
+      }
+      showToast(nextInfo.kakaoUrl ? '카카오페이 송금 주소까지 저장했어요.' : 'QR을 저장했어요. 친구에게 QR을 보여줘요.');
+    };
     const file = kakao.files[0];
     if (!file) { save(''); return; }
     const reader = new FileReader(); reader.onload = () => save(reader.result); reader.readAsDataURL(file);
@@ -587,6 +620,7 @@ async function setupPublicProfile() {
     }
     const name = profile.display_name || 'GIFTO 사용자';
     activeProfile.name = name;
+    activeProfile.paymentInfo = {kakaoQr:profile.kakao_pay_qr_url || '', kakaoUrl:profile.kakao_pay_url || ''};
     avatar.textContent = Array.from(name)[0];
     if (/^https?:\/\//i.test(profile.avatar_url || '')) {
       const image = document.createElement('img'); image.alt = name + ' 프로필 사진';

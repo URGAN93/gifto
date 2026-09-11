@@ -8,6 +8,7 @@ create table public.profiles (
   birth_date date,
   intro text,
   kakao_pay_qr_url text,
+  kakao_pay_url text,
   created_at timestamptz not null default now()
 );
 create table public.wishlists (
