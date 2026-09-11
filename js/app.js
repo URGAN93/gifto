@@ -314,6 +314,30 @@ function setupPaymentSettings() {
   kakao.previousElementSibling.textContent = '카카오페이 송금 QR';
   const help = document.createElement('p'); help.className = 'field-help'; help.textContent = '내 카카오페이 코드송금 QR 이미지를 저장한 뒤, 위에서 파일을 선택해 주세요. 금액을 지정하지 않은 QR을 등록해 주세요.';
   kakao.insertAdjacentElement('afterend', help);
+  const savedUrlLabel = document.createElement('label');
+  savedUrlLabel.className = 'field-label'; savedUrlLabel.textContent = '저장된 카카오페이 송금 URL';
+  const savedUrl = document.createElement('input');
+  savedUrl.className = 'text-field'; savedUrl.type = 'url'; savedUrl.readOnly = true;
+  savedUrl.placeholder = 'QR을 저장하면 실제 송금 주소가 표시돼요.';
+  const copyUrl = document.createElement('button');
+  copyUrl.type = 'button'; copyUrl.className = 'button button-ghost'; copyUrl.textContent = '송금 URL 복사'; copyUrl.hidden = true;
+  const showSavedUrl = value => {
+    const url = isKakaoPayLink(value) ? value : '';
+    savedUrl.value = url; copyUrl.hidden = !url;
+  };
+  copyUrl.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(savedUrl.value); showToast('카카오페이 송금 URL을 복사했어요.'); }
+    catch { savedUrl.focus(); savedUrl.select(); showToast('URL을 길게 눌러 복사해 주세요.'); }
+  });
+  help.insertAdjacentElement('afterend', savedUrlLabel);
+  savedUrlLabel.insertAdjacentElement('afterend', savedUrl);
+  savedUrl.insertAdjacentElement('afterend', copyUrl);
+  showSavedUrl(info.kakaoUrl);
+  window.giftoDb.auth.getSession().then(async ({data}) => {
+    if (!data.session) return;
+    const {data: profile} = await window.giftoDb.from('profiles').select('kakao_pay_url').eq('id', data.session.user.id).maybeSingle();
+    if (profile?.kakao_pay_url) showSavedUrl(profile.kakao_pay_url);
+  });
   const preview = document.createElement('img'); preview.className = 'payment-qr-preview'; preview.alt = '등록한 카카오페이 송금 QR';
   if (info.kakaoQr) { preview.src = info.kakaoQr; kakao.insertAdjacentElement('afterend', preview); }
   form.addEventListener('submit', async event => {
@@ -328,13 +352,14 @@ function setupPaymentSettings() {
         .from('profiles')
         .update({kakao_pay_qr_url:kakaoQr || null, kakao_pay_url:nextInfo.kakaoUrl || null})
         .eq('id', data.session.user.id)
-        .select('id,kakao_pay_qr_url')
+        .select('id,kakao_pay_qr_url,kakao_pay_url')
         .maybeSingle();
       if (error || !savedProfile?.kakao_pay_qr_url) {
         showToast('공유용 QR 저장에 실패했어요. 로그인 상태를 확인한 뒤 다시 저장해 주세요.');
         return;
       }
       savePaymentInfo(nextInfo);
+      showSavedUrl(savedProfile.kakao_pay_url);
       showToast(nextInfo.kakaoUrl ? '카카오페이 송금 주소까지 저장했어요.' : 'QR을 저장했어요. 친구에게 QR을 보여줘요.');
     };
     const file = kakao.files[0];
