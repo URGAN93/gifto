@@ -22,7 +22,11 @@ function renderAuthNavigation(session) {
   });
   if (session && location.pathname === new URL(window.giftoLoginUrl).pathname) {
     const next = new URLSearchParams(location.search).get('next');
-    const destination = next && !/^https?:/i.test(next) ? new URL(next, giftoRoot).href : window.giftoHomeUrl;
+    let destination = window.giftoHomeUrl;
+    try {
+      const target = new URL(next || '', giftoRoot);
+      if (next && target.origin === giftoRoot.origin && target.pathname.startsWith(giftoRoot.pathname)) destination = target.href;
+    } catch {}
     location.replace(destination);
   }
 }
