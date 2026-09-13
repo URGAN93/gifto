@@ -7,13 +7,13 @@ function element() {
     replaceChildren(){this.children=[];},querySelectorAll(){return this.children.filter(n=>n.type==='button');},
     set innerHTML(value){this.html=value;this.children=[];},get innerHTML(){return this.html;},focus(){}};
 }
-async function testFlow(answer) {
+async function testFlow(answer, raised = 0) {
   const nodes = new Map(), storage = new Map(), events = {};
   const get = key => {if(!nodes.has(key)) nodes.set(key,element());return nodes.get(key);};
   storage.set('gifto-transfer-attempt:owner:item',JSON.stringify({id:'attempt',amount:30000,phase:'away'}));
   let submits = 0;
   const ctx={URLSearchParams,crypto,location:{search:'?product=item'},ownerId:'owner',
-    activeProfile:{name:'받는친구',products:[{id:'item',dbId:'item',status:'open',price:100000,raised:0,name:'선물',wishlistId:'list'}]},
+    activeProfile:{name:'받는친구',products:[{id:'item',dbId:'item',status:'open',price:100000,raised,name:'선물',wishlistId:'list'}]},
     isUuid:()=>false,won:String,
     document:{querySelector:get,querySelectorAll:()=>[],addEventListener(k,fn){events[k]=fn;},createElement:element,hidden:false},
     window:{addEventListener(k,fn){events[k]=fn;},giftoContributions:{async submit(p,amount){assert.equal(amount,30000);submits++;return 'receipt';}}},
@@ -50,4 +50,4 @@ async function testReceipt() {
   const receipts=JSON.parse(memory.get('gifto-contribution-receipts-v1'));
   assert.equal(receipts[0].accountId,'account');assert.equal(receipts[0].token,null);
 }
-Promise.all([testFlow(true),testFlow(false),testReceipt()]).then(()=>console.log('PASS: return does not submit; yes submits; no preserves amount; retry reuses receipt; login claims receipt')).catch(error=>{console.error(error);process.exitCode=1;});
+Promise.all([testFlow(true),testFlow(false),testFlow(true,150000),testReceipt()]).then(()=>console.log('PASS: return does not submit; yes submits even above goal; no preserves amount; retry reuses receipt; login claims receipt')).catch(error=>{console.error(error);process.exitCode=1;});

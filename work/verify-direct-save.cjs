@@ -2,7 +2,7 @@ const fs = require('fs'), vm = require('vm'), assert = require('node:assert/stri
 const source = fs.readFileSync('js/app.js', 'utf8').replace(/\r\n/g, '\n');
 const start = source.indexOf("document.querySelector('[data-save-wishlist]').addEventListener", source.indexOf('function setupCreateWishlist'));
 const end = source.indexOf('\n}\nasync function compressProductPhoto', start);
-async function check(hasProduct, existing = false) {
+async function check(hasProduct, existing = false, paymentReady = true) {
   let handler, inserted = [];
   let createdLists = 0;
   const messages = [];
@@ -13,6 +13,7 @@ async function check(hasProduct, existing = false) {
       return {value:sel === '#list-title' ? '내 선물' : '설명'};
     }},
     photoBusy:false, initialWishlistLoad:Promise.resolve(), initialLoadError:null,
+    requireWishlistPaymentSetup:async()=>{if (!paymentReady) throw new Error('송금 QR을 먼저 등록해 주세요.');},
     savedList:existing ? {id:'existing-list', category:'housewarming'} : null, targetListId:existing ? 'existing-list' : null,
     GIFT_CATEGORIES:{birthday:{title:'생일 선물'}},
     name:{value:hasProduct ? '새 시계' : ''}, price:{value:hasProduct ? '100000' : ''},
@@ -34,7 +35,7 @@ async function check(hasProduct, existing = false) {
   };
   vm.createContext(ctx); vm.runInContext(source.slice(start,end).trim(),ctx);
   await handler({preventDefault(){},currentTarget:button});
-  if(hasProduct) {
+  if(hasProduct && (paymentReady || existing)) {
     assert.equal(inserted.length,1); assert.equal(inserted[0].name,'새 시계');
     assert.equal(inserted[0].image_url,'photo');
     assert.equal(inserted[0].wishlist_id,existing ? 'existing-list' : 'new-list');
@@ -44,7 +45,8 @@ async function check(hasProduct, existing = false) {
     assert.equal(messages.length,0);
   } else {
     assert.equal(inserted.length,0); assert.equal(ctx.location.href,undefined);
-    assert.ok(messages[0].includes('상품'));
+    assert.ok(messages[0].includes(hasProduct ? '송금 QR' : '상품'));
+    assert.equal(createdLists,0);
   }
 }
-Promise.all([check(true),check(false),check(true,true)]).then(()=>console.log('PASS: new list created; add targets existing list without creating or updating list; empty save blocked')).catch(error=>{console.error(error);process.exitCode=1;});
+Promise.all([check(true),check(false),check(true,true),check(true,false,false),check(true,true,false)]).then(()=>console.log('PASS: configured create; existing add unchanged; empty save blocked; missing QR creates no list or items')).catch(error=>{console.error(error);process.exitCode=1;});
