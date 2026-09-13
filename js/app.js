@@ -52,27 +52,38 @@ async function loadRemoteWishlist(owner) {
     ({data: profile, error: profileError} = await window.giftoDb.from('profiles').select('id,display_name,avatar_url,kakao_pay_qr_url').eq('id', owner).single());
   }
   if (profileError || !profile) throw new Error('PROFILE_NOT_FOUND');
-  const {data: wishlist, error: wishlistError} = await window.giftoDb.from('wishlists').select('id,title,note').eq('owner_id', owner).eq('is_public', true).order('created_at', {ascending:false}).limit(1).maybeSingle();
+  let {data: wishlist, error: wishlistError} = await window.giftoDb.from('wishlists').select('id,title,note,category,deadline_at').eq('owner_id', owner).eq('is_public', true).order('created_at', {ascending:false}).limit(1).maybeSingle();
+  // Category was introduced after the first public lists. Do not make existing
+  // wishlist and participation pages unavailable while that migration is pending.
+  if (wishlistError?.code === '42703') {
+    ({data: wishlist, error: wishlistError} = await window.giftoDb.from('wishlists').select('id,title,note').eq('owner_id', owner).eq('is_public', true).order('created_at', {ascending:false}).limit(1).maybeSingle());
+    if (wishlist) wishlist.category = 'birthday';
+  }
   if (wishlistError || !wishlist) throw new Error('WISHLIST_NOT_FOUND');
-  const {data: rows, error: itemError} = await window.giftoDb.from('wishlist_items').select('id,name,price,product_url,image_url,emoji,color,position,status,shared_at,closed_at,proof_image_url,proof_message,proof_published_at,contributions(id,contributor_name,amount,status,created_at,confirmed_at)').eq('wishlist_id', wishlist.id).order('position');
+  const itemColumns = 'id,name,price,product_url,image_url,emoji,color,position,status,shared_at,closed_at,proof_image_url,proof_message,proof_published_at,raised_amount,supporter_count,contributions(id,contributor_id,contributor_name,amount,status,created_at,confirmed_at)';
+  let {data: rows, error: itemError} = await window.giftoDb.from('wishlist_items').select(itemColumns).eq('wishlist_id', wishlist.id).order('position');
+  // Keep existing shared pages available if the database migration is still propagating.
+  if (itemError) {
+    ({data: rows, error: itemError} = await window.giftoDb.from('wishlist_items').select('id,name,price,product_url,image_url,emoji,color,position,status,shared_at,closed_at,proof_image_url,proof_message,proof_published_at,contributions(id,contributor_id,contributor_name,amount,status,created_at,confirmed_at)').eq('wishlist_id', wishlist.id).order('position'));
+  }
   if (itemError) throw itemError;
   const products = (rows || []).map(row => {
     const confirmed = (row.contributions || []).filter(contribution => contribution.status === 'confirmed');
-    return {id:row.id, dbId:row.id, name:row.name, price:row.price, productUrl:row.product_url || '', imageUrl:row.image_url || '', emoji:row.emoji, color:row.color, status:row.status || 'draft', sharedAt:row.shared_at, closedAt:row.closed_at, proofImageUrl:row.proof_image_url || '', proofMessage:row.proof_message || '', proofPublishedAt:row.proof_published_at, raised:confirmed.reduce((sum, contribution) => sum + contribution.amount, 0), supporters:confirmed.length, contributors:confirmed, allContributions:row.contributions || [], hasContributions:(row.contributions || []).length > 0};
+    return {id:row.id, dbId:row.id, name:row.name, price:row.price, productUrl:row.product_url || '', imageUrl:row.image_url || '', emoji:row.emoji, color:row.color, status:row.status || 'draft', sharedAt:row.shared_at, closedAt:row.closed_at, proofImageUrl:row.proof_image_url || '', proofMessage:row.proof_message || '', proofPublishedAt:row.proof_published_at, raised:Number(row.raised_amount ?? confirmed.reduce((sum, contribution) => sum + contribution.amount, 0)), supporters:Number(row.supporter_count ?? confirmed.length), contributors:confirmed, allContributions:row.contributions || [], hasContributions:(row.contributions || []).length > 0};
   });
   const loaded = {profile, wishlist, products}; remoteWishlistCache.set(owner, loaded); return loaded;
 }
 function clearRemoteWishlist(owner) { remoteWishlistCache.delete(owner); }
 async function getOrCreateOwnWishlist(user, details = {}) {
-  const {data: existing, error: readError} = await window.giftoDb.from('wishlists').select('id,title,note').eq('owner_id', user.id).order('created_at', {ascending:false}).limit(1).maybeSingle();
+  const {data: existing, error: readError} = await window.giftoDb.from('wishlists').select('id,title,note,category,deadline_at').eq('owner_id', user.id).order('created_at', {ascending:false}).limit(1).maybeSingle();
   if (readError) throw readError;
   const title = details.title || existing?.title || (user.user_metadata?.name || user.user_metadata?.nickname || '나') + '의 생일 선물';
   if (existing) {
-    const {data, error} = await window.giftoDb.from('wishlists').update({title, note:details.note ?? existing.note ?? null, is_public:true}).eq('id', existing.id).select('id,title,note').single();
+    const {data, error} = await window.giftoDb.from('wishlists').update({title, note:details.note ?? existing.note ?? null, category:details.category || existing.category || 'birthday', deadline_at:details.deadlineAt || null, is_public:true}).eq('id', existing.id).select('id,title,note,category,deadline_at').single();
     if (error) throw error;
     return data;
   }
-  const {data, error} = await window.giftoDb.from('wishlists').insert({owner_id:user.id, title, note:details.note || null, is_public:true}).select('id,title,note').single();
+  const {data, error} = await window.giftoDb.from('wishlists').insert({owner_id:user.id, title, note:details.note || null, category:details.category || 'birthday', deadline_at:details.deadlineAt || null, is_public:true}).select('id,title,note,category,deadline_at').single();
   if (error) throw error;
   return data;
 }
@@ -113,7 +124,7 @@ async function setupHomeWishlistStatus() {
   const cacheKey = 'gifto-home-wishlist-status';
   const reveal = async products => {
     status.hidden = true;
-    status.innerHTML = `<div class="home-wishlist-list">${products.map((product, index) => { const percent = product.price ? Math.min(100, Math.round((product.raised || 0) / product.price * 100)) : 0; return `<a href="pages/participants.html?product=${encodeURIComponent(product.id)}&from=home" class="home-wishlist-card"><div class="home-wishlist-image" style="--image-bg:${escapeHtml(product.color || '#f2f7ff')}">${escapeHtml(product.emoji || '🎁')}${product.imageUrl ? `<img src="${escapeHtml(product.imageUrl)}" alt="${escapeHtml(product.name)}" />` : ''}</div><div><p>${index === 0 ? '나의 위시리스트 현황' : '나의 위시리스트'}</p><strong>${escapeHtml(product.name)}</strong><span>${won(product.raised || 0)} 모임 · ${percent}% · ${product.supporters || 0}명 참여</span></div><b>›</b></a>`; }).join('')}</div>`;
+    status.innerHTML = `<div class="home-wishlist-list">${products.map((product, index) => { const percent = product.price ? Math.min(100, Math.round((product.raised || 0) / product.price * 100)) : 0; return `<a href="pages/participants.html?product=${encodeURIComponent(product.id)}&owner=${encodeURIComponent(auth.session.user.id)}&from=home" class="home-wishlist-card"><div class="home-wishlist-image" style="--image-bg:${escapeHtml(product.color || '#f2f7ff')}">${escapeHtml(product.emoji || '🎁')}${product.imageUrl ? `<img src="${escapeHtml(product.imageUrl)}" alt="${escapeHtml(product.name)}" />` : ''}</div><div><p>${index === 0 ? '나의 위시리스트 현황' : '나의 위시리스트'}</p><strong>${escapeHtml(product.name)}</strong><span>${won(product.raised || 0)} 모임 · ${percent}% · ${product.supporters || 0}명 참여</span></div><b>›</b></a>`; }).join('')}</div>`;
     const images = [...status.querySelectorAll('img')].filter(image => !image.complete);
     if (images.length) await Promise.race([Promise.all(images.map(image => new Promise(resolve => { image.onload = resolve; image.onerror = resolve; }))), new Promise(resolve => setTimeout(resolve, 700))]);
     status.hidden = false;
@@ -571,11 +582,11 @@ function setupWishlistEditing() {
         actions.append(editPhoto, close);
       } else if (status === 'closed') {
         const state = document.createElement('button'); state.type = 'button'; state.className = 'product-delete is-locked'; state.textContent = '마감됨'; state.disabled = true;
-        const proof = document.createElement('a'); proof.className = 'product-close product-proof-link'; proof.href = 'thankyou.html?product=' + encodeURIComponent(product.id); proof.textContent = '인증 남기기';
+        const proof = document.createElement('a'); proof.className = 'product-close product-proof-link'; proof.href = 'thankyou.html?product=' + encodeURIComponent(product.id); proof.textContent = '구매 인증하기';
         actions.append(state, proof);
       } else {
         const state = document.createElement('button'); state.type = 'button'; state.className = 'product-delete is-locked'; state.textContent = '인증 완료'; state.disabled = true;
-        const proof = document.createElement('a'); proof.className = 'product-edit product-proof-link'; proof.href = 'thankyou.html?product=' + encodeURIComponent(product.id); proof.textContent = '인증 보기';
+        const proof = document.createElement('a'); proof.className = 'product-edit product-proof-link'; proof.href = 'thankyou.html?product=' + encodeURIComponent(product.id); proof.textContent = '인증 수정·마음 전하기';
         actions.append(state, proof);
       }
       card.append(actions);
@@ -744,6 +755,19 @@ async function setupThankYou() {
     catch (error) { photoStatus.textContent = error.message || '사진을 읽지 못했어요.'; }
   });
   const save = document.querySelector('[data-thanks-submit]');
+  const share = document.querySelector('[data-thanks-share]');
+  if (item.status === 'proof_posted' && share) share.hidden = false;
+  const shareThanks = async () => {
+    const url = new URL('wishlist.html?owner=' + encodeURIComponent(auth.session.user.id), location.href).href;
+    const shareText = `${item.name} 선물이 도착했어요 🎁\n${message.value.trim()}\n${url}`;
+    if (navigator.share) {
+      try { await navigator.share({title:'GIFTO 선물 인증', text:shareText, url}); return; }
+      catch (shareError) { if (shareError?.name === 'AbortError') return; }
+    }
+    try { await navigator.clipboard.writeText(shareText); showToast('감사 메시지와 링크를 복사했어요. 카카오톡에 붙여넣어 주세요.'); }
+    catch { showToast('카카오톡으로 보낼 링크를 준비하지 못했어요.'); }
+  };
+  share?.addEventListener('click', shareThanks);
   save.addEventListener('click', async () => {
     if (!imageUrl) { showToast('선물 사진을 한 장 남겨 주세요.'); return; }
     const text = message.value.trim(); if (!text) { showToast('감사 메시지를 적어 주세요.'); return; }
@@ -753,17 +777,8 @@ async function setupThankYou() {
     const {count} = await window.giftoDb.from('contributions').select('id', {count:'exact', head:true}).eq('item_id', item.id).eq('status', 'confirmed');
     const preview = document.querySelector('.thanks-preview');
     preview.hidden = false; preview.querySelector('strong').textContent = item.name + ' 선물 인증'; preview.querySelector('p').textContent = text; preview.querySelector('span').textContent = `함께해 준 ${count || 0}명에게 감사 링크를 보낼 수 있어요.`;
-    save.disabled = false; save.textContent = '카카오톡으로 감사 링크 공유';
-    save.onclick = async () => {
-      const url = new URL('wishlist.html?owner=' + encodeURIComponent(auth.session.user.id), location.href).href;
-      const shareText = `${item.name} 선물이 도착했어요 🎁\n${text}\n${url}`;
-      if (navigator.share) {
-        try { await navigator.share({title:'GIFTO 선물 인증', text:shareText, url}); return; }
-        catch (shareError) { if (shareError?.name === 'AbortError') return; }
-      }
-      try { await navigator.clipboard.writeText(shareText); showToast('감사 메시지와 링크를 복사했어요. 카카오톡에 붙여넣어 주세요.'); }
-      catch { showToast('카카오톡으로 보낼 링크를 준비하지 못했어요.'); }
-    };
+    save.disabled = false; save.textContent = '수정 저장';
+    if (share) share.hidden = false;
     showToast('선물 인증을 저장했어요.');
   });
 }
@@ -908,8 +923,18 @@ async function hydrateMyRemoteWishlist() {
       sessionStorage.removeItem('gifto-mypage-scroll-y');
       requestAnimationFrame(() => window.scrollTo(0, savedScroll));
     }
-  } catch {
-    // A first-time user has no cloud wishlist yet, so local drafts remain visible.
+  } catch (error) {
+    // Keep the last known list visible while a schema update or request settles.
+    try {
+      const cached = JSON.parse(localStorage.getItem('gifto-home-wishlist-status') || 'null');
+      if (cached?.ownerId === auth.session.user.id && Array.isArray(cached.products) && cached.products.length) {
+        appData.products = cached.products;
+        renderProducts();
+        setupWishlistEditing();
+        return;
+      }
+    } catch {}
+    console.error('GIFTO my wishlist failed to load', error);
   }
 }
 async function setupPublicProfile() {
@@ -929,7 +954,7 @@ async function setupPublicProfile() {
     } else if (isMine && isUuid(ownerId)) {
       const remote = await loadRemoteWishlist(ownerId);
       profile = remote.profile;
-      details = {title:remote.wishlist.title, note:remote.wishlist.note};
+      details = {title:remote.wishlist.title, note:remote.wishlist.note, category:remote.wishlist.category, deadline_at:remote.wishlist.deadline_at};
       activeProfile.products = remote.products;
       ownerView = true;
     } else if (isMine) {
@@ -941,7 +966,7 @@ async function setupPublicProfile() {
     } else {
       const remote = await loadRemoteWishlist(ownerId);
       profile = remote.profile;
-      details = {title:remote.wishlist.title, note:remote.wishlist.note};
+      details = {title:remote.wishlist.title, note:remote.wishlist.note, category:remote.wishlist.category, deadline_at:remote.wishlist.deadline_at};
       activeProfile.products = remote.products;
     }
     const name = profile.display_name || 'GIFTO 사용자';
@@ -955,7 +980,9 @@ async function setupPublicProfile() {
     }
     const title = details.title || name + '의 생일 선물';
     document.title = title + ' | GIFTO';
-    document.querySelector('[data-owner-countdown]').textContent = name + '님께 전하는 선물';
+    const category = GIFT_CATEGORIES[details.category] || GIFT_CATEGORIES.birthday;
+    const deadlineText = details.deadline_at ? ` · ${new Date(details.deadline_at + 'T00:00:00').getMonth() + 1}월 ${new Date(details.deadline_at + 'T00:00:00').getDate()}일 마감` : '';
+    document.querySelector('[data-owner-countdown]').textContent = `${name}님의 ${category.label}${deadlineText}`;
     document.querySelector('[data-owner-title]').textContent = title;
     document.querySelector('[data-owner-copy]').textContent = details.note ?? '생일에 받고 싶은 선물을 모아봤어요. 함께해 주는 마음만으로도 고마워요 🎁';
     renderProducts();
@@ -1018,6 +1045,12 @@ function setupCreateWishlist() {
   const addButton = document.querySelector('[data-add-product]');
   if (!addButton) return;
   const getCategory = setupWishlistCategory();
+  const addPanel = document.querySelector('.add-product-panel');
+  const deadlineField = document.createElement('div');
+  deadlineField.innerHTML = '<label class="field-label" for="list-deadline">마감일 <span class="optional">선택</span></label><input id="list-deadline" class="text-field" type="date" /><p class="field-help">비워두면 마감일 없이 진행해요. 설정하면 공유 페이지에 함께 보여요.</p>';
+  addPanel?.before(deadlineField);
+  const deadline = deadlineField.querySelector('#list-deadline');
+  deadline.min = new Date().toISOString().slice(0, 10);
   let selectedEmoji = '🎁';
   let uploadedPhoto = '';
   let photoBusy = false;
@@ -1063,6 +1096,7 @@ function setupCreateWishlist() {
       appData.products = remote.products;
       document.querySelector('#list-title').value = remote.wishlist.title || document.querySelector('#list-title').value;
       if (remote.wishlist.note) document.querySelector('#list-note').value = remote.wishlist.note;
+      if (remote.wishlist.deadline_at) deadline.value = remote.wishlist.deadline_at;
       showDrafts();
     } catch {
       // First wishlist: keep locally prepared draft products until the first save.
@@ -1089,7 +1123,7 @@ function setupCreateWishlist() {
       const {data, error} = await window.giftoDb.auth.getSession();
       if (error || !data.session) { location.href = 'login.html'; return; }
       const saveButton = event.currentTarget; saveButton.classList.add('is-disabled'); saveButton.textContent = '저장 중…';
-      const details = {title:document.querySelector('#list-title').value.trim(), note:document.querySelector('#list-note').value.trim(), category:getCategory()};
+      const details = {title:document.querySelector('#list-title').value.trim(), note:document.querySelector('#list-note').value.trim(), category:getCategory(), deadlineAt:deadline.value || null};
       localStorage.setItem('gifto-wishlist-details:' + data.session.user.id, JSON.stringify(details));
       const wishlist = await getOrCreateOwnWishlist(data.session.user, details);
       // Older projects can still save while the category migration is waiting to run.
