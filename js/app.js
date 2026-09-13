@@ -394,7 +394,53 @@ function showTransferGuide(type, value) {
     });
   }
 }
+function setupQrGuideViewer() {
+  const link = document.querySelector('.qr-guide a');
+  if (!link) return;
+  const thumbnail = link.querySelector('img');
+  const dialog = document.createElement('dialog');
+  dialog.className = 'qr-guide-viewer';
+  dialog.setAttribute('aria-label', 'QR 저장 방법 크게 보기');
+  dialog.innerHTML = '<button type="button" class="qr-guide-close" aria-label="사진 닫기">✕ 닫기</button><img />';
+  const image = dialog.querySelector('img');
+  image.src = link.href; image.alt = thumbnail.alt;
+  document.body.append(dialog);
+  let closing = false;
+  let previousOverflow = '';
+  const show = () => {
+    if (dialog.open) return;
+    previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    dialog.showModal();
+    dialog.querySelector('button').focus();
+  };
+  const hide = () => {
+    if (!dialog.open) return;
+    dialog.close(); document.body.style.overflow = previousOverflow;
+    closing = false; link.focus();
+  };
+  const requestClose = () => {
+    if (closing || !dialog.open) return;
+    if (history.state?.giftoQrGuide) { closing = true; history.back(); }
+    else hide();
+  };
+  link.addEventListener('click', event => {
+    event.preventDefault();
+    if (dialog.open) return;
+    history.pushState({...history.state, giftoQrGuide:true}, '', location.href);
+    show();
+  });
+  dialog.querySelector('button').addEventListener('click', requestClose);
+  dialog.addEventListener('cancel', event => { event.preventDefault(); requestClose(); });
+  dialog.addEventListener('click', event => { if (event.target === dialog) requestClose(); });
+  window.addEventListener('popstate', () => {
+    if (history.state?.giftoQrGuide) show();
+    else hide();
+  });
+  if (history.state?.giftoQrGuide) show();
+}
 function setupPaymentSettings() {
+  setupQrGuideViewer();
   const form = document.querySelector('[data-payment-settings]');
   if (!form) return;
   const info = getPaymentInfo();
@@ -1131,15 +1177,65 @@ function setupCreateWishlist() {
   let selectedEmoji = '🎁';
   let uploadedPhoto = '';
   let photoBusy = false;
-  const updatePhotoButtons = () => { addButton.disabled = photoBusy; };
+  const updatePhotoButtons = () => { addButton.disabled = photoBusy; removeBackground.disabled = photoBusy; };
   let photoVersion = 0;
   const photoInput = document.querySelector('#new-product-photo');
   const photoPreview = document.querySelector('[data-product-photo-preview]');
   const photoStatus = document.querySelector('[data-photo-status]');
   const removePhoto = document.querySelector('[data-remove-product-photo]');
+  const syncPhotoIcon = () => {
+    document.querySelectorAll('[data-emoji]').forEach(button => {
+      button.disabled = !!uploadedPhoto;
+      button.classList.toggle('selected', !uploadedPhoto && button.dataset.emoji === selectedEmoji);
+      button.setAttribute('aria-pressed', String(!uploadedPhoto && button.dataset.emoji === selectedEmoji));
+    });
+  };
+  const removeBackground = document.createElement('button');
+  removeBackground.type = 'button'; removeBackground.className = 'button button-ghost';
+  removeBackground.textContent = '배경 지우기'; removeBackground.hidden = true;
+  removeBackground.dataset.newRemoveBackground = '';
+  removePhoto.before(removeBackground);
+  const backgroundPreview = document.createElement('div');
+  backgroundPreview.className = 'background-preview'; backgroundPreview.hidden = true;
+  backgroundPreview.innerHTML = '<img alt="배경 제거 결과" /><div><button type="button" data-apply-new-background>적용</button><button type="button" data-keep-new-original>원본 유지</button></div>';
+  removeBackground.after(backgroundPreview);
+  let processedPhoto = '';
+  const resetBackground = () => {
+    processedPhoto = ''; backgroundPreview.hidden = true;
+    backgroundPreview.querySelector('img').removeAttribute('src');
+    removeBackground.textContent = '배경 지우기'; removeBackground.hidden = true;
+  };
+  removeBackground.addEventListener('click', async () => {
+    if (!uploadedPhoto || photoBusy) return;
+    const version = photoVersion;
+    photoBusy = true; updatePhotoButtons(); removeBackground.textContent = '배경을 지우는 중…';
+    try {
+      const image = await removeProductBackground(uploadedPhoto);
+      if (version !== photoVersion) return;
+      processedPhoto = image; backgroundPreview.querySelector('img').src = image;
+      backgroundPreview.hidden = false;
+      photoStatus.textContent = '배경 제거 결과를 확인하고 적용해 주세요.';
+    } catch (error) {
+      if (version === photoVersion) photoStatus.textContent = error.message || '배경을 지우지 못했어요. 원본 사진은 유지돼요.';
+    } finally {
+      if (version === photoVersion) { photoBusy = false; updatePhotoButtons(); removeBackground.textContent = '배경 지우기'; }
+    }
+  });
+  backgroundPreview.querySelector('[data-apply-new-background]').addEventListener('click', () => {
+    if (!processedPhoto) return;
+    uploadedPhoto = processedPhoto; photoPreview.src = uploadedPhoto;
+    backgroundPreview.hidden = true; processedPhoto = '';
+    photoStatus.textContent = '배경을 지운 사진을 적용했어요.';
+  });
+  backgroundPreview.querySelector('[data-keep-new-original]').addEventListener('click', () => {
+    backgroundPreview.hidden = true; processedPhoto = '';
+    photoStatus.textContent = '원본 사진을 유지했어요.';
+  });
   document.querySelector('[data-new-photo-picker]').addEventListener('click', () => photoInput.click());
   const clearPhoto = () => {
     photoVersion += 1; uploadedPhoto = ''; photoInput.value = '';
+    syncPhotoIcon();
+    resetBackground(); photoBusy = false; updatePhotoButtons();
     photoPreview.hidden = true; photoPreview.removeAttribute('src'); removePhoto.hidden = true;
     photoStatus.textContent = 'JPG·PNG·WebP 사진을 올려 주세요. 크기와 용량을 자동으로 줄여요.';
   };
@@ -1148,12 +1244,15 @@ function setupCreateWishlist() {
     const file = photoInput.files[0];
     if (!file) return;
     const version = ++photoVersion;
+    resetBackground();
     uploadedPhoto = ''; photoPreview.hidden = true; removePhoto.hidden = true;
     photoBusy = true; updatePhotoButtons(); photoStatus.textContent = '사진 크기를 줄이고 있어요…';
     try {
       const result = await compressProductPhoto(file);
       if (version !== photoVersion) return;
       uploadedPhoto = result.url; photoPreview.src = uploadedPhoto; photoPreview.hidden = false; removePhoto.hidden = false;
+      syncPhotoIcon();
+      removeBackground.hidden = false;
       photoStatus.textContent = `사진 준비 완료 · ${Math.ceil(result.bytes / 1024)}KB`;
     } catch (error) {
       if (version === photoVersion) { photoInput.value = ''; photoStatus.textContent = error.message; }
@@ -1165,7 +1264,7 @@ function setupCreateWishlist() {
   const draftList = document.querySelector('[data-draft-products]');
   const showDrafts = () => { draftList.innerHTML = appData.products.map(item => `<div class="draft-product">${item.imageUrl ? `<img class="draft-product-thumb" src="${escapeHtml(item.imageUrl)}" alt="${escapeHtml(item.name)}" />` : `<span class="draft-product-thumb draft-product-emoji">${escapeHtml(item.emoji)}</span>`}<strong>${escapeHtml(item.name)}</strong><small>${won(item.price)}</small></div>`).join(''); };
   showDrafts();
-  (async () => {
+  const initialWishlistLoad = (async () => {
     const {data: auth} = await window.giftoDb.auth.getSession();
     if (!auth.session) return;
     try {
@@ -1180,15 +1279,17 @@ function setupCreateWishlist() {
     }
   })();
   document.querySelectorAll('[data-emoji]').forEach(button => button.addEventListener('click', () => {
+    if (uploadedPhoto) return;
     document.querySelectorAll('[data-emoji]').forEach(item => item.classList.remove('selected'));
     button.classList.add('selected'); selectedEmoji = button.dataset.emoji;
   }));
   addButton.addEventListener('click', async () => {
+    await initialWishlistLoad;
     const productName = name.value.trim(); const productPrice = parseMoney(price.value);
     if (!productName || !Number.isFinite(productPrice) || productPrice <= 0) { showToast('상품 이름과 0원보다 큰 가격을 입력해 주세요.'); return; }
     addButton.textContent = '대표 이미지 확인 중…'; addButton.disabled = true;
     const imageUrl = uploadedPhoto;
-    const nextProducts = [...appData.products, { id: `custom-${Date.now()}`, name: productName, price: productPrice, raised: 0, supporters: 0, emoji: selectedEmoji, color: '#f2f7ff', productUrl: '', imageUrl }];
+    const nextProducts = [...appData.products, { id: `custom-${Date.now()}`, name: productName, price: productPrice, raised: 0, supporters: 0, emoji: imageUrl ? '' : selectedEmoji, color: '#f2f7ff', productUrl: '', imageUrl }];
     try { saveProducts(nextProducts); }
     catch { showToast('브라우저 저장공간이 부족해요. 입력한 내용은 유지했어요.'); addButton.disabled = false; addButton.textContent = '상품 목록에 추가'; return; }
     appData.products = nextProducts; name.value = ''; price.value = ''; clearPhoto(); showDrafts();
@@ -1196,10 +1297,26 @@ function setupCreateWishlist() {
   });
   document.querySelector('[data-save-wishlist]').addEventListener('click', async event => {
     event.preventDefault();
+    const saveButton = event.currentTarget;
+    if (saveButton.classList.contains('is-disabled')) return;
+    if (photoBusy) { showToast('사진 처리가 끝나면 저장해 주세요.'); return; }
+    const saveLabel = saveButton.innerHTML;
+    saveButton.classList.add('is-disabled'); saveButton.textContent = '저장 중…';
     try {
+      await initialWishlistLoad;
+      // Include the visible product form even when the intermediate add button
+      // was skipped. Never silently save a list without the entered product.
+      if (name.value.trim() || price.value.trim() || uploadedPhoto) {
+        const productName = name.value.trim(); const productPrice = parseMoney(price.value);
+        if (!productName || productPrice <= 0) throw new Error('상품 이름과 가격을 입력해 주세요.');
+        appData.products.push({id:`custom-${Date.now()}`, name:productName, price:productPrice,
+          raised:0, supporters:0, emoji:uploadedPhoto ? '' : selectedEmoji,
+          color:'#f2f7ff', imageUrl:uploadedPhoto, productUrl:''});
+        name.value = ''; price.value = ''; clearPhoto(); showDrafts();
+      }
+      if (!appData.products.length) throw new Error('저장할 상품을 하나 이상 입력해 주세요.');
       const {data, error} = await window.giftoDb.auth.getSession();
       if (error || !data.session) { location.href = 'login.html'; return; }
-      const saveButton = event.currentTarget; saveButton.classList.add('is-disabled'); saveButton.textContent = '저장 중…';
       const details = {title:document.querySelector('#list-title').value.trim(), note:document.querySelector('#list-note').value.trim(), category:getCategory(), deadlineAt:deadline.value || null};
       localStorage.setItem('gifto-wishlist-details:' + data.session.user.id, JSON.stringify(details));
       const wishlist = await getOrCreateOwnWishlist(data.session.user, details);
@@ -1217,8 +1334,14 @@ function setupCreateWishlist() {
       saveProducts(appData.products);
       localStorage.setItem('gifto-wishlist-details:' + data.session.user.id, JSON.stringify(details));
       clearRemoteWishlist(data.session.user.id);
+      const saved = await loadRemoteWishlist(data.session.user.id);
+      const savedIds = new Set(saved.products.map(product => product.id));
+      if (appData.products.some(product => product.dbId && !savedIds.has(product.dbId))) {
+        throw new Error('상품 저장 후 목록을 확인하지 못했어요. 다시 저장해 주세요.');
+      }
       location.href = `wishlist.html?owner=${encodeURIComponent(data.session.user.id)}`;
-    } catch { showToast('저장하지 못했어요. 저장공간과 연결 상태를 확인해 주세요.'); }
+    } catch (error) { showToast(error.message || '저장하지 못했어요. 연결 상태를 확인해 주세요.'); }
+    finally { saveButton.classList.remove('is-disabled'); saveButton.innerHTML = saveLabel; }
   });
 }
 async function compressProductPhoto(file) {
