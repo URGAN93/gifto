@@ -21,7 +21,9 @@ function renderAuthNavigation(session) {
       : window.giftoLoginUrl;
   });
   if (session && location.pathname === new URL(window.giftoLoginUrl).pathname) {
-    location.replace(window.giftoHomeUrl);
+    const next = new URLSearchParams(location.search).get('next');
+    const destination = next && !/^https?:/i.test(next) ? new URL(next, giftoRoot).href : window.giftoHomeUrl;
+    location.replace(destination);
   }
 }
 function renderAccountProfile(session) {

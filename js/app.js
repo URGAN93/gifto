@@ -52,20 +52,10 @@ async function loadRemoteWishlist(owner) {
     ({data: profile, error: profileError} = await window.giftoDb.from('profiles').select('id,display_name,avatar_url,kakao_pay_qr_url').eq('id', owner).single());
   }
   if (profileError || !profile) throw new Error('PROFILE_NOT_FOUND');
-  let {data: wishlist, error: wishlistError} = await window.giftoDb.from('wishlists').select('id,title,note,category,deadline_at').eq('owner_id', owner).eq('is_public', true).order('created_at', {ascending:false}).limit(1).maybeSingle();
-  // Category was introduced after the first public lists. Do not make existing
-  // wishlist and participation pages unavailable while that migration is pending.
-  if (wishlistError?.code === '42703') {
-    ({data: wishlist, error: wishlistError} = await window.giftoDb.from('wishlists').select('id,title,note').eq('owner_id', owner).eq('is_public', true).order('created_at', {ascending:false}).limit(1).maybeSingle());
-    if (wishlist) wishlist.category = 'birthday';
-  }
-  if (wishlistError || !wishlist) throw new Error('WISHLIST_NOT_FOUND');
-  const itemColumns = 'id,name,price,product_url,image_url,emoji,color,position,status,shared_at,closed_at,proof_image_url,proof_message,proof_published_at,raised_amount,supporter_count,contributions(id,contributor_id,contributor_name,amount,status,created_at,confirmed_at)';
-  let {data: rows, error: itemError} = await window.giftoDb.from('wishlist_items').select(itemColumns).eq('wishlist_id', wishlist.id).order('position');
-  // Keep existing shared pages available if the database migration is still propagating.
-  if (itemError) {
-    ({data: rows, error: itemError} = await window.giftoDb.from('wishlist_items').select('id,name,price,product_url,image_url,emoji,color,position,status,shared_at,closed_at,proof_image_url,proof_message,proof_published_at,contributions(id,contributor_id,contributor_name,amount,status,created_at,confirmed_at)').eq('wishlist_id', wishlist.id).order('position'));
-  }
+  const {data: wishlist, error: wishlistError} = await window.giftoDb.from('wishlists').select('*').eq('owner_id', owner).order('created_at', {ascending:false}).limit(1).maybeSingle();
+  if (wishlistError) throw wishlistError;
+  if (!wishlist) return {profile, wishlist:{}, products:[]};
+  const {data: rows, error: itemError} = await window.giftoDb.from('wishlist_items').select('*,contributions(*)').eq('wishlist_id', wishlist.id).order('position');
   if (itemError) throw itemError;
   const products = (rows || []).map(row => {
     const confirmed = (row.contributions || []).filter(contribution => contribution.status === 'confirmed');
@@ -140,9 +130,13 @@ async function setupHomeWishlistStatus() {
     const remote = await loadRemoteWishlist(auth.session.user.id);
     products = remote.products;
   } catch {
-    products = cached?.ownerId === auth.session.user.id && Array.isArray(cached.products) ? cached.products : appData.products;
+    localStorage.removeItem(cacheKey);
+    status.hidden = false;
+    status.textContent = '위시리스트를 불러오지 못했어요. 다시 로그인한 뒤 확인해 주세요.';
+    revealPrimaryAction();
+    return;
   }
-  if (!products.length) { revealPrimaryAction(); return; }
+  if (!products.length) { status.hidden = true; status.innerHTML = ''; localStorage.removeItem(cacheKey); revealPrimaryAction(); return; }
   await reveal(products);
   try { localStorage.setItem(cacheKey, JSON.stringify({ownerId:auth.session.user.id, products})); } catch {}
   const create = document.querySelector('[data-auth-destination="pages/create.html"]');
@@ -181,26 +175,52 @@ async function setupContribution() {
   document.querySelector('[data-recipient-name]').textContent = `${activeProfile.name}에게 마음을 전해요`;
   const input = document.querySelector('#custom-amount');
   const sendButton = document.querySelector('[data-kakao-send]');
-  const reportButton = document.querySelector('[data-report-sent]');
-  const amountStep = document.querySelector('[data-amount-after-payment]');
   const fallback = document.querySelector('[data-qr-fallback]');
   const getContributionPaymentInfo = () => ownerId === 'seongmin' ? getPaymentInfo() : (activeProfile.paymentInfo || {});
   const returnKey = 'gifto-returning-from-kakao';
-  const showAmountStep = () => { amountStep.hidden = false; fallback.hidden = true; sendButton.hidden = true; input.focus(); };
+  let selectedAmount = 0;
+  let isReporting = false;
+  const presetButtons = [...document.querySelectorAll('[data-amount-presets] [data-amount]')];
+  const paintAmount = () => {
+    presetButtons.forEach(button => button.classList.toggle('is-selected', Number(button.dataset.amount) === selectedAmount));
+    sendButton.disabled = !selectedAmount;
+    sendButton.textContent = selectedAmount ? `${won(selectedAmount)} 보내기` : '금액을 선택해 주세요';
+  };
+  const setAmount = value => {
+    selectedAmount = Math.max(0, Number(value) || 0);
+    if (selectedAmount && !presetButtons.some(button => Number(button.dataset.amount) === selectedAmount)) input.value = String(selectedAmount);
+    else if (selectedAmount) input.value = '';
+    paintAmount();
+  };
+  presetButtons.forEach(button => button.addEventListener('click', () => setAmount(button.dataset.amount)));
+  input.addEventListener('input', () => setAmount(input.value));
+  paintAmount();
+  const finishContribution = async () => {
+    if (isReporting || !selectedAmount) return;
+    isReporting = true;
+    try {
+      await reportContribution(product, selectedAmount);
+      location.href = `complete.html?product=${encodeURIComponent(product.id)}&amount=${selectedAmount}&owner=${encodeURIComponent(ownerId)}&method=kakao`;
+    } catch (error) {
+      isReporting = false;
+      showToast(error.message || '송금 확인 대기를 만들지 못했어요.');
+    }
+  };
   const resumeAfterKakao = () => {
     if (sessionStorage.getItem(returnKey) !== product.id) return;
-    sessionStorage.removeItem(returnKey); showAmountStep();
+    sessionStorage.removeItem(returnKey); finishContribution();
   };
   if (sessionStorage.getItem(returnKey) === product.id) resumeAfterKakao();
   window.addEventListener('pageshow', resumeAfterKakao);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) resumeAfterKakao(); });
   sendButton.addEventListener('click', async () => {
+    if (!selectedAmount) { input.focus(); showToast('보낼 금액을 먼저 골라 주세요.'); return; }
     const paymentInfo = getContributionPaymentInfo();
     if (!paymentInfo.kakaoQr) { showToast('아직 카카오페이 송금 QR이 등록되지 않았어요.'); return; }
     sendButton.disabled = true; sendButton.textContent = '카카오페이 연결 중…';
     const url = paymentInfo.kakaoUrl || await decodeQrPayload(paymentInfo.kakaoQr);
     if (url && isKakaoPayLink(url)) {
-      fallback.innerHTML = '<strong>카카오페이로 이동할게요</strong><p>카카오페이에서 송금한 뒤, 브라우저의 뒤로가기 또는 앱 전환으로 GIFTO에 돌아와 주세요. 돌아오면 금액 입력 화면이 자동으로 열립니다.</p>';
+      fallback.innerHTML = `<strong>${won(selectedAmount)}을 보내 주세요</strong><p>카카오페이에서 같은 금액을 입력해 송금한 뒤, 브라우저의 뒤로가기 또는 앱 전환으로 GIFTO에 돌아와 주세요. 돌아오면 확인 대기 이력이 자동으로 만들어져요.</p>`;
       fallback.hidden = false; sendButton.hidden = true;
       const open = document.createElement('button'); open.type = 'button'; open.className = 'button button-primary'; open.textContent = '카카오페이 열기';
       open.addEventListener('click', () => { sessionStorage.setItem(returnKey, product.id); location.href = url; });
@@ -208,18 +228,11 @@ async function setupContribution() {
       return;
     }
     sessionStorage.setItem(returnKey, product.id);
-    fallback.innerHTML = '<strong>카카오페이 QR 송금</strong><p>카카오톡에서 코드 스캔을 열고 QR을 스캔해 송금해 주세요. GIFTO로 돌아오면 금액 입력 화면이 자동으로 열립니다.</p><img alt="카카오페이 송금 QR 코드" />';
+    fallback.innerHTML = `<strong>${won(selectedAmount)}을 보내 주세요</strong><p>카카오톡에서 코드 스캔을 열고 QR을 스캔한 뒤, 같은 금액을 입력해 송금해 주세요.</p><img alt="카카오페이 송금 QR 코드" />`;
     fallback.querySelector('img').src = paymentInfo.kakaoQr;
     fallback.hidden = false; sendButton.hidden = true;
-    const returned = document.createElement('button'); returned.type = 'button'; returned.className = 'button button-primary'; returned.textContent = '송금 후 돌아왔어요';
-    returned.addEventListener('click', showAmountStep); fallback.append(returned);
-  });
-  reportButton.addEventListener('click', () => {
-    const amount = Number(input.value);
-    if (!Number.isFinite(amount) || amount <= 0) { input.focus(); showToast('보낸 금액을 입력해 주세요.'); return; }
-    reportContribution(product, amount).then(() => {
-      location.href = `complete.html?product=${encodeURIComponent(product.id)}&amount=${amount}&owner=${encodeURIComponent(ownerId)}&method=kakao`;
-    }).catch(error => showToast(error.message || '송금 완료 처리를 하지 못했어요.'));
+    const returned = document.createElement('button'); returned.type = 'button'; returned.className = 'button button-primary'; returned.textContent = '송금했어요';
+    returned.addEventListener('click', finishContribution); fallback.append(returned);
   });
 }
 async function reportContribution(product, amount) {
@@ -325,6 +338,20 @@ function setupSmallInteractions() {
     document.querySelector('[data-complete-status]').textContent = activeProfile.name + '님의 입금 확인 전';
   }
 }
+function setupPaymentReturn() {
+  const page = document.querySelector('[data-payment-return]');
+  if (!page) return;
+  const params = new URLSearchParams(location.search);
+  const product = params.get('product') || '';
+  const owner = params.get('owner') || '';
+  const wishlist = page.querySelector('[data-return-wishlist]');
+  wishlist.href = `wishlist.html?owner=${encodeURIComponent(owner)}`;
+  page.querySelector('[data-return-kakao-login]').addEventListener('click', () => {
+    // The pending contribution token will be claimed after the OAuth callback.
+    sessionStorage.setItem('gifto-claim-contribution', JSON.stringify({product, owner, createdAt:Date.now()}));
+    location.href = `login.html?next=${encodeURIComponent(`payment-return.html?product=${product}&owner=${owner}`)}`;
+  });
+}
 function setupKakaoLogin() {
   const button = document.querySelector('[data-kakao-login]');
   if (!button || !window.giftoDb) return;
@@ -336,7 +363,7 @@ function setupKakaoLogin() {
     const { data, error } = await window.giftoDb.auth.signInWithOAuth({
       provider: 'kakao',
       options: {
-        redirectTo: window.giftoLoginUrl,
+        redirectTo: location.href,
         skipBrowserRedirect: true
       }
     });
@@ -555,9 +582,40 @@ function showToast(message) {
   const toast = document.createElement('div'); toast.className = 'toast'; toast.textContent = message; document.body.append(toast);
   requestAnimationFrame(() => toast.classList.add('show')); setTimeout(() => toast.remove(), 1800);
 }
+
+async function deleteEmptyProduct(id) {
+  const {data: auth, error: authError} = await window.giftoDb.auth.getSession();
+  if (authError || !auth.session) throw new Error('다시 로그인한 뒤 삭제해 주세요.');
+  const {data: item, error: itemError} = await window.giftoDb.from('wishlist_items').select('*').eq('id', id).maybeSingle();
+  if (itemError) throw itemError;
+  if (!item) throw new Error('상품이 이미 삭제되었거나 현재 계정에 조회 권한이 없어요.');
+  const {data: list, error: listError} = await window.giftoDb.from('wishlists').select('owner_id').eq('id', item.wishlist_id).single();
+  if (listError || list?.owner_id !== auth.session.user.id) throw new Error('내 상품만 삭제할 수 있어요.');
+  const {count, error: countError} = await window.giftoDb.from('contributions').select('id', {count:'exact', head:true}).eq('item_id', id);
+  if (countError) throw countError;
+  if (count !== 0 || Number(item.raised_amount) > 0) throw new Error('입금 확인 대기 또는 참여 기록이 있어 삭제할 수 없어요.');
+  const {data: removed, error} = await window.giftoDb.from('wishlist_items').delete().eq('id', id).select('id');
+  if (error) throw error;
+  if (!removed?.some(row => row.id === id)) throw new Error('삭제 권한을 확인하지 못했어요. 다시 로그인한 뒤 시도해 주세요.');
+  clearRemoteWishlist(list.owner_id);
+  localStorage.removeItem('gifto-home-wishlist-status');
+  appData.products = appData.products.filter(product => product.id !== id);
+}
+
 function setupWishlistEditing() {
   const list = document.querySelector('[data-product-list][data-editable="true"]');
   if (!list) return;
+  const removeRemoteProduct = async product => {
+    if (product.hasContributions || product.supporters > 0 || product.raised > 0) {
+      showToast('참여 또는 입금 확인 대기 건이 있는 상품은 삭제할 수 없어요.');
+      return;
+    }
+    if (!confirm(product.name + '을(를) 위시리스트에서 삭제할까요?')) return;
+    try { await deleteEmptyProduct(product.dbId); }
+    catch (error) { showToast(error.message); return; }
+    await hydrateMyRemoteWishlist();
+    showToast('상품을 삭제했어요.');
+  };
   list.querySelectorAll('.product-card').forEach((card, index) => {
     const product = appData.products[index];
     if (product.dbId) {
@@ -575,11 +633,17 @@ function setupWishlistEditing() {
       if (status === 'draft') {
         const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'product-edit'; edit.textContent = '수정'; edit.addEventListener('click', () => openProductEditor(product));
         const publish = document.createElement('button'); publish.type = 'button'; publish.className = 'product-close'; publish.textContent = '공개 시작'; publish.addEventListener('click', () => publishProduct(product));
-        actions.append(edit, publish);
+        const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'product-delete'; remove.textContent = '삭제'; remove.addEventListener('click', () => removeRemoteProduct(product));
+        actions.append(edit, remove, publish);
       } else if (status === 'open') {
         const editPhoto = document.createElement('button'); editPhoto.type = 'button'; editPhoto.className = 'product-edit'; editPhoto.textContent = '수정'; editPhoto.addEventListener('click', () => openProductEditor(product));
         const close = document.createElement('button'); close.type = 'button'; close.className = 'product-close'; close.textContent = '마감'; close.addEventListener('click', () => closeProduct(product));
-        actions.append(editPhoto, close);
+        actions.append(editPhoto);
+        if (!product.hasContributions && !product.supporters && !product.raised) {
+          const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'product-delete'; remove.textContent = '삭제'; remove.addEventListener('click', () => removeRemoteProduct(product));
+          actions.append(remove);
+        }
+        actions.append(close);
       } else if (status === 'closed') {
         const state = document.createElement('button'); state.type = 'button'; state.className = 'product-delete is-locked'; state.textContent = '마감됨'; state.disabled = true;
         const proof = document.createElement('a'); proof.className = 'product-close product-proof-link'; proof.href = 'thankyou.html?product=' + encodeURIComponent(product.id); proof.textContent = '구매 인증하기';
@@ -686,8 +750,8 @@ function openProductEditor(product) {
   layer.querySelector('[data-delete-product]')?.addEventListener('click', async () => {
     if (!confirm(product.name + '을(를) 위시리스트에서 삭제할까요?')) return;
     const remove = layer.querySelector('[data-delete-product]'); remove.disabled = true; remove.textContent = '삭제 중…';
-    const {error} = await window.giftoDb.from('wishlist_items').delete().eq('id', product.dbId).eq('status', 'draft');
-    if (error) { remove.disabled = false; remove.textContent = '이 상품 삭제'; showToast('상품을 삭제하지 못했어요.'); return; }
+    try { await deleteEmptyProduct(product.dbId); }
+    catch (error) { remove.disabled = false; remove.textContent = '이 상품 삭제'; showToast(error.message); return; }
     close(); await hydrateMyRemoteWishlist(); showToast('상품을 삭제했어요.');
   });
   document.body.append(layer);
@@ -811,14 +875,18 @@ async function setupParticipants() {
     return;
   }
   try {
-    const {data: item, error: itemError} = await window.giftoDb.from('wishlist_items').select('id,wishlist_id').eq('id', id).single();
-    if (itemError || !item) throw new Error('ITEM_NOT_FOUND');
-    const {data: wishlist, error: wishlistError} = await window.giftoDb.from('wishlists').select('owner_id').eq('id', item.wishlist_id).single();
-    if (wishlistError || !wishlist?.owner_id) throw new Error('WISHLIST_NOT_FOUND');
-    clearRemoteWishlist(wishlist.owner_id);
-    const remote = await loadRemoteWishlist(wishlist.owner_id);
-    const product = remote.products.find(entry => entry.id === id);
-    if (!product) throw new Error('PRODUCT_NOT_FOUND');
+    const {data: auth} = await window.giftoDb.auth.getSession();
+    const {data: item, error: itemError} = await window.giftoDb.from('wishlist_items').select('*').eq('id', id).maybeSingle();
+    if (itemError) throw itemError;
+    if (!item) throw new Error('ITEM_NOT_FOUND');
+    // Render the item independently of optional profile/list metadata.
+    document.querySelector('[data-participant-product]').textContent = item.name;
+    const {data: wishlist, error: listError} = await window.giftoDb.from('wishlists').select('owner_id').eq('id', item.wishlist_id).single();
+    if (listError) throw listError;
+    const wishlistOwner = wishlist.owner_id;
+    const {data: entries, error: entriesError} = await window.giftoDb.from('contributions').select('*').eq('item_id', id);
+    if (entriesError) throw entriesError;
+    const product = {...item, dbId:item.id, imageUrl:item.image_url, allContributions:entries};
     const contributions = (product.allContributions || []).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
     const confirmed = contributions.filter(entry => entry.status === 'confirmed');
     const raised = confirmed.reduce((sum, entry) => sum + entry.amount, 0);
@@ -834,10 +902,26 @@ async function setupParticipants() {
       const state = entry.status === 'pending' ? '<em class="contribution-pending">입금 확인 대기</em>' : '<em class="contribution-confirmed">' + dateLabel + '</em>';
       return '<li><span class="contributor-avatar">' + escapeHtml(entry.contributor_name).slice(0,1) + '</span><strong>' + escapeHtml(entry.contributor_name) + '</strong><span>' + won(entry.amount) + '</span>' + state + '</li>';
     }).join('') : '<li class="empty-contributors">아직 함께한 친구가 없어요.</li>';
+    const deleteButton = document.querySelector('[data-participant-delete]');
+    const canDelete = auth?.session?.user?.id === wishlistOwner && contributions.length === 0 && !Number(product.raised_amount);
+    if (deleteButton && canDelete) {
+      deleteButton.hidden = false;
+      deleteButton.addEventListener('click', async () => {
+        if (!confirm(product.name + '을(를) 위시리스트에서 삭제할까요?')) return;
+        deleteButton.disabled = true; deleteButton.textContent = '삭제 중…';
+        try { await deleteEmptyProduct(product.dbId); }
+        catch (error) { deleteButton.disabled = false; deleteButton.textContent = '이 상품 삭제'; showToast(error.message); return; }
+        location.replace('my-page.html');
+      });
+    }
     if (page) page.hidden = false;
   } catch (error) {
     console.error('GIFTO participants failed to load', error);
-    view.innerHTML = '<li class="empty-contributors">참여 내역을 불러오지 못했어요. 새로고침 후 다시 확인해 주세요.</li>';
+    const missing = error.message === 'ITEM_NOT_FOUND';
+    if (missing) document.querySelector('[data-participant-product]').textContent = '상품을 찾을 수 없어요';
+    document.querySelector('.participants-summary').hidden = true;
+    document.querySelector('[data-participant-delete]').hidden = true;
+    view.innerHTML = '<li class="empty-contributors">' + (missing ? '삭제되었거나 현재 계정에서 볼 수 없는 상품이에요. 마이페이지에서 목록을 다시 확인해 주세요.' : '참여 내역을 불러오지 못했어요. 잠시 후 다시 확인해 주세요.') + '</li>';
     if (page) page.hidden = false;
   }
 }
@@ -924,16 +1008,9 @@ async function hydrateMyRemoteWishlist() {
       requestAnimationFrame(() => window.scrollTo(0, savedScroll));
     }
   } catch (error) {
-    // Keep the last known list visible while a schema update or request settles.
-    try {
-      const cached = JSON.parse(localStorage.getItem('gifto-home-wishlist-status') || 'null');
-      if (cached?.ownerId === auth.session.user.id && Array.isArray(cached.products) && cached.products.length) {
-        appData.products = cached.products;
-        renderProducts();
-        setupWishlistEditing();
-        return;
-      }
-    } catch {}
+    appData.products = [];
+    localStorage.removeItem('gifto-home-wishlist-status');
+    list.innerHTML = '<p class="empty-state">위시리스트를 불러오지 못했어요. 다시 로그인한 뒤 확인해 주세요.</p>';
     console.error('GIFTO my wishlist failed to load', error);
   }
 }
@@ -1179,7 +1256,7 @@ async function getProductPreview(url) {
   }
   return data || {};
 }
-setupFriendList(); setupPublicProfile(); renderProducts(); setupWishlistEditing(); setupContribution(); setupParticipants(); setupPaymentSettings(); setupBirthdaySettings(); setupDisplayName(); setupProfileAvatar(); setupProfileEdit(); setupPendingConfirmations(); setupHomePendingBadge(); setupCreateWishlist(); setupKakaoLogin(); hydrateMyRemoteWishlist(); setupHomeWishlistStatus();
+setupFriendList(); setupPublicProfile(); renderProducts(); setupWishlistEditing(); setupContribution(); setupParticipants(); setupPaymentSettings(); setupBirthdaySettings(); setupDisplayName(); setupProfileAvatar(); setupProfileEdit(); setupPendingConfirmations(); setupHomePendingBadge(); setupCreateWishlist(); setupPaymentReturn(); setupKakaoLogin(); hydrateMyRemoteWishlist(); setupHomeWishlistStatus();
 contributionChannel?.addEventListener('message', event => {
   if (!['contribution-confirmed', 'profile-updated'].includes(event.data?.type)) return;
   if (ownerId && event.data.owner === ownerId) setupPublicProfile();
