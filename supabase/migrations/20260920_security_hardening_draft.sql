@@ -2,8 +2,6 @@
 -- Prerequisite: the guest-contribution RPC and kakao_pay_url migrations are installed
 -- and verified in a dedicated test project. Apply only after the app has changed
 -- public profile reads to get_public_profile; the current app still reads profiles.
-begin;
-
 -- Public profile pages need four fields only.  Stop exposing every profile column
 -- (for example birth_date) through the REST table endpoint.
 drop policy if exists "profiles readable" on public.profiles;
@@ -44,8 +42,6 @@ revoke all on function public.decide_gift_contribution(uuid, boolean) from publi
 grant execute on function public.decide_gift_contribution(uuid, boolean) to authenticated;
 revoke all on function public.my_gift_contributions() from public, anon;
 grant execute on function public.my_gift_contributions() to authenticated;
-
-commit;
 
 -- Validation after this migration is in supabase/security-tests/. Do not treat a
 -- successful SQL execution as a security test; use three real test accounts.
