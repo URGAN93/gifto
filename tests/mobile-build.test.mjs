@@ -67,6 +67,13 @@ test('privacy, support, and account-deletion pages use the published support con
   assert.match(read('work/privacy-policy-draft.md'), /urgan93@gmail\.com/);
 });
 
+test('My Page links to the account and privacy pages', () => {
+  const myPage = read('pages/my-page.html');
+  for (const route of ['privacy.html', 'support.html', 'delete-account.html']) {
+    assert.match(myPage, new RegExp(`href="${route}"`));
+  }
+});
+
 test('release artifacts exclude server secrets and test-operation folders', () => {
   const files = readdirSync('dist', { recursive: true });
   assert.ok(!files.some(file => String(file).match(/service_role|\.env|security-tests|20260920_security/i)));
