@@ -20,6 +20,14 @@ test('mobile build contains all screens and only bundled startup scripts', () =>
   }
   for (const file of ['.env', 'supabase', 'work', '.git', 'node_modules']) assert.equal(existsSync(`dist/${file}`), false);
 });
+
+test('native home always restores the top navigation and cache-busts its bundle', () => {
+  const entry = read('mobile/entry.mjs');
+  assert.match(entry, /ensureHomeNavigation/);
+  assert.match(entry, /home\.prepend\(bar\)/);
+  assert.match(read('scripts/build-mobile.mjs'), /js\/native\.js\?v=20260915/);
+});
+
 test('native security config and callback registrations match', () => {
   const config = JSON.parse(read('capacitor.config.json'));
   assert.equal(config.appId, 'com.urganlab.gifto');

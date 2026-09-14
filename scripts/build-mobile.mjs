@@ -20,7 +20,7 @@ for (const page of pages) {
   const cdn = /<script\s+src="https:\/\/cdn\.jsdelivr\.net\/npm\/@supabase\/supabase-js@2"\s*><\/script>/g;
   // Informational policy/support pages intentionally have no runtime SDK.
   if (!html.match(cdn)) continue;
-  html = html.replace(cdn, `<script src="${prefix}js/native.js"></script>`)
+  html = html.replace(cdn, `<script src="${prefix}js/native.js?v=20260915"></script>`)
     .replace(/<link[^>]+rel="manifest"[^>]*>/g, '')
     .replace(/<script[^>]+src="[^\"]*js\/pwa\.js[^\"]*"[^>]*><\/script>/g, '');
   await writeFile(file, html);

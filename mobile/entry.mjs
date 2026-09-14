@@ -14,6 +14,21 @@ window.supabase = supabase;
 window.jsQR = jsQR;
 window.qrcode = qrcode;
 if (Capacitor.isNativePlatform()) {
+  const ensureHomeNavigation = () => {
+    const home = document.querySelector('.app-shell.home');
+    if (!home) return;
+    let bar = home.querySelector(':scope > .topbar');
+    if (!bar) {
+      bar = document.createElement('header');
+      bar.className = 'topbar';
+      bar.innerHTML = '<span class="topbar-spacer" aria-hidden="true"></span><a class="brand" href="index.html" aria-label="GIFTO 홈"><span class="brand-mark">G</span> GIFTO</a><a class="icon-button pending-anchor" href="pages/login.html" data-auth-destination="pages/my-page.html" aria-label="내 페이지">☺<span class="pending-badge" data-pending-badge hidden aria-label="입금 확인 대기 건수"></span></a>';
+      home.prepend(bar);
+    }
+    bar.style.display = 'flex';
+    bar.style.visibility = 'visible';
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ensureHomeNavigation, { once: true });
+  else ensureHomeNavigation();
   const root = new URL('/', location.href).href;
   const notify = message => {
     const output = document.querySelector('[data-auth-message]');
