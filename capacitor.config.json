@@ -1,0 +1,12 @@
+{
+  "appId": "com.urganlab.gifto",
+  "appName": "GIFTO",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https",
+    "hostname": "localhost"
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}

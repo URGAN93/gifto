@@ -8,7 +8,7 @@
   const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   let claiming;
   const api = window.giftoContributions = {
-    async submit(product, amount, attemptId, recipient) {
+    async submit(product, amount, attemptId, recipient, guestName = '') {
       const rows = read();
       let receipt = rows.find(row => row.attemptId === attemptId);
       if (!receipt) {
@@ -21,7 +21,7 @@
       }
       if (receipt.amount !== amount || receipt.itemId !== product.id) throw new Error('금액을 다시 선택해 주세요.');
       const {data, error} = await window.giftoDb.rpc('submit_gift_contribution', {
-        p_item:product.id, p_amount:amount, p_token:receipt.token
+        p_item:product.id, p_amount:amount, p_token:receipt.token, p_contributor_name:guestName
       });
       if (error) throw new Error('송금 내역을 저장하지 못했어요. 잠시 후 다시 눌러 주세요.');
       receipt.id = data; save(rows);

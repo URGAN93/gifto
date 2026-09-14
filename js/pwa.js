@@ -1,5 +1,5 @@
 const pwaScriptUrl = document.currentScript?.src || new URL('js/pwa.js', location.href).href;
-if ('serviceWorker' in navigator) {
+if ('serviceWorker' in navigator && !window.giftoNative?.isNative) {
   window.addEventListener('load', () => {
     const scriptUrl = new URL('../sw.js', pwaScriptUrl);
     const scope = new URL('./', scriptUrl).pathname;

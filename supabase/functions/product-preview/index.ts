@@ -62,7 +62,7 @@ async function preview(value) {
 }
 Deno.serve(async request => {
   const origin = request.headers.get('origin') || '';
-  const allowed = origin === 'https://urgan93.github.io' || /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);
+  const allowed = ['https://urgan93.github.io', 'https://localhost', 'capacitor://localhost'].includes(origin) || /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);
   const headers = {'Content-Type':'application/json', 'Vary':'Origin', 'Access-Control-Allow-Origin':allowed ? origin : 'https://urgan93.github.io', 'Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods':'POST, OPTIONS'};
   const reply = (body, status = 200) => new Response(JSON.stringify(body), {status, headers});
   if (origin && !allowed) return reply({error:'ORIGIN_NOT_ALLOWED'}, 403);

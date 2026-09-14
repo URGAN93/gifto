@@ -103,7 +103,17 @@
       const img = dialog.querySelector('img'); img.src = imageUrl; img.hidden = false;
       dialog.querySelector('[data-status]').textContent = '1080 × 1080 · 진행 금액은 이미지에 포함하지 않아요.';
       const save = dialog.querySelector('[data-save]'); save.disabled = false;
-      save.onclick = () => { const link = document.createElement('a'); link.href = imageUrl; link.download = 'gifto-wishlist.png'; document.body.append(link); link.click(); link.remove(); };
+      if (window.giftoNative?.isNative) save.textContent = '이미지 공유 / 저장';
+      save.onclick = async () => {
+        if (window.giftoNative?.isNative) {
+          save.disabled = true;
+          try { await window.giftoNative.shareImage(blob); }
+          catch { dialog.querySelector('[data-status]').textContent = '공유를 완료하지 못했어요. 다시 누르거나 링크를 복사해 주세요.'; }
+          finally { save.disabled = false; }
+          return;
+        }
+        const link = document.createElement('a'); link.href = imageUrl; link.download = 'gifto-wishlist.png'; document.body.append(link); link.click(); link.remove();
+      };
     } catch (error) { dialog.querySelector('[data-status]').textContent = error.message + ' 링크 공유는 사용할 수 있어요.'; }
   };
 })();

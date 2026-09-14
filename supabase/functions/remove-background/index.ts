@@ -1,4 +1,5 @@
-const allowedOrigins = new Set(['https://urgan93.github.io']);
+// Native WebView origins. Local source only until explicitly deployed.
+const allowedOrigins = new Set(['https://urgan93.github.io', 'https://localhost', 'capacitor://localhost']);
 function cors(request: Request) {
   const origin = request.headers.get('origin') || '';
   const allowed = allowedOrigins.has(origin) || /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);
