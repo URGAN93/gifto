@@ -704,12 +704,16 @@ function setupProfileEdit() {
   if (!button) return;
   button.addEventListener('click', () => {
     const layer = document.createElement('div'); layer.className = 'display-name-layer';
-    layer.innerHTML = `<section class="profile-edit-sheet"><div class="product-editor-heading"><h2>프로필 편집</h2><button type="button" aria-label="닫기" data-close-profile-edit>×</button></div><p>GIFTO에서 친구에게 보여질 정보를 설정해요.</p><button type="button" data-open-nickname><span>✎</span><div><strong>닉네임 수정</strong><small>공유 페이지와 참여 내역에 표시돼요.</small></div><b>›</b></button><button type="button" data-open-avatar><span>◉</span><div><strong>프로필 사진</strong><small>사진을 쓰지 않으면 이니셜로 표시돼요.</small></div><b>›</b></button></section>`;
+    layer.innerHTML = `<section class="profile-edit-sheet"><div class="product-editor-heading"><h2>프로필 편집</h2><button type="button" aria-label="닫기" data-close-profile-edit>×</button></div><p>GIFTO에서 친구에게 보여질 정보를 설정해요.</p><button type="button" data-open-nickname><span>✎</span><div><strong>닉네임 수정</strong><small>공유 페이지와 참여 내역에 표시돼요.</small></div><b>›</b></button><button type="button" data-open-avatar><span>◉</span><div><strong>프로필 사진</strong><small>사진을 쓰지 않으면 이니셜로 표시돼요.</small></div><b>›</b></button><button class="profile-signout" type="button" data-sign-out><span>↗</span><div><strong>로그아웃</strong><small>이 기기에서만 로그인 정보가 지워져요.</small></div><b>›</b></button></section>`;
     const close = () => layer.remove();
     layer.addEventListener('click', event => { if (event.target === layer) close(); });
     layer.querySelector('[data-close-profile-edit]').addEventListener('click', close);
     layer.querySelector('[data-open-nickname]').addEventListener('click', () => { close(); document.querySelector('[data-display-name-toggle]')?.click(); });
     layer.querySelector('[data-open-avatar]').addEventListener('click', () => { close(); document.querySelector('[data-profile-avatar-toggle]')?.click(); });
+    layer.querySelector('[data-sign-out]').addEventListener('click', async () => {
+      await window.giftoDb.auth.signOut({ scope:'local' });
+      location.replace(new URL('../index.html', location.href).href);
+    });
     document.body.append(layer);
   });
 }

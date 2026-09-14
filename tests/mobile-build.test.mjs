@@ -28,6 +28,7 @@ test('native home always restores the top navigation and cache-busts its bundle'
   assert.match(read('scripts/build-mobile.mjs'), /js\/native\.js\?v=20260915/);
   assert.match(read('dist/index.html'), /viewport-fit=cover/);
   assert.match(read('dist/pages/login.html'), /css\/style\.css\?v=20260915/);
+  assert.match(read('css/style.css'), /\.button\.kakao-login\{background:#fee500;color:#191600;box-shadow:none\}/);
 });
 
 test('native security config and callback registrations match', () => {
@@ -82,6 +83,12 @@ test('My Page links to the account and privacy pages', () => {
   for (const route of ['privacy.html', 'support.html', 'delete-account.html']) {
     assert.match(myPage, new RegExp(`href="${route}"`));
   }
+});
+
+test('My Page profile editor provides a local logout action', () => {
+  const app = read('js/app.js');
+  assert.match(app, /data-sign-out/);
+  assert.match(app, /auth\.signOut\(\{ scope:'local' \}\)/);
 });
 
 test('release artifacts exclude server secrets and test-operation folders', () => {

@@ -113,3 +113,5 @@
 /* Keep navigation visible when the native WebView applies a top safe-area inset. */
 .topbar{position:sticky;top:0;z-index:10;background:#fffefbf2;backdrop-filter:blur(10px)}
 @supports (padding-top:max(0px,env(safe-area-inset-top))){.topbar{height:calc(70px + env(safe-area-inset-top));padding:env(safe-area-inset-top) 22px 0}}
+.button.kakao-login{background:#fee500;color:#191600;box-shadow:none}
+.profile-edit-sheet>button.profile-signout{border-color:#f2dfe1}.profile-edit-sheet>button.profile-signout>span{background:#fff0f1;color:#b4515b}.profile-edit-sheet>button.profile-signout strong{color:#9d4650}
