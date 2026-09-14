@@ -27,6 +27,7 @@ test('native home always restores the top navigation and cache-busts its bundle'
   assert.match(entry, /home\.prepend\(bar\)/);
   assert.match(read('scripts/build-mobile.mjs'), /js\/native\.js\?v=20260915/);
   assert.match(read('dist/index.html'), /viewport-fit=cover/);
+  assert.match(read('dist/pages/login.html'), /css\/style\.css\?v=20260915/);
 });
 
 test('native security config and callback registrations match', () => {

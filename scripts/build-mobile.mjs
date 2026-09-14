@@ -19,6 +19,8 @@ for (const page of pages) {
   let html = await readFile(file, 'utf8');
   html = html.replace(/(<meta\s+name="viewport"\s+content=")([^"]*)("\s*\/?\s*>)/i, (_, start, content, end) =>
     start + (content.includes('viewport-fit=cover') ? content : `${content}, viewport-fit=cover`) + end);
+  html = html.replace(/(<link\b[^>]*\bhref=")([^"]*css\/style\.css)(?:\?[^"<>]*)?("[^>]*>)/gi,
+    (_, start, path, end) => `${start}${path}?v=20260915${end}`);
   const cdn = /<script\s+src="https:\/\/cdn\.jsdelivr\.net\/npm\/@supabase\/supabase-js@2"\s*><\/script>/g;
   // Informational policy/support pages intentionally have no runtime SDK.
   if (!html.match(cdn)) { await writeFile(file, html); continue; }
