@@ -1,0 +1,24 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="../css/style.css"><title>친구 위시리스트 미리보기</title></head><body><main class="app-shell"><section class="section">
+<button id="back" class="button button-ghost" hidden>← 홈으로</button>
+<p class="eyebrow">마감이 가까운 순</p><h2>친구 위시리스트</h2>
+<div id="tabs" class="friend-tabs" hidden><button data-friends-tab="visible">전체</button><button data-friends-tab="hidden">숨긴 리스트</button></div>
+<div data-friend-list></div><div id="detail" hidden></div>
+<p class="field-help" style="margin-top:32px">미리보기 · 가상 데이터 / 실제 송금 없음</p>
+</section></main><script>
+const demoRows=Array.from({length:12},(_,i)=>({owner_id:'demo',list_id:'demo-'+i,display_name:['민지','지훈','수연'][i%3],title:['생일 위시리스트','집들이 선물','함께하는 기념일'][i%3],deadline_at:new Date(Date.now()+(i+1)*86400000).toISOString(),item_count:i%4+1,hidden:false}));
+window.giftoDb={auth:{getSession:async()=>({data:{session:{user:{id:'demo'}}}})},rpc:async(name,args)=>{if(name==='set_friend_wishlist_hidden'){demoRows.find(r=>r.list_id===args.p_list).hidden=args.p_hidden;return {};}return {data:demoRows.map(r=>({...r}))};}};
+const host=document.querySelector('[data-friend-list]'),tabs=document.querySelector('#tabs'),detail=document.querySelector('#detail'),back=document.querySelector('#back');
+function show(full){host.hidden=false;detail.hidden=true;host.toggleAttribute('data-friends-full',full);tabs.hidden=!full;back.hidden=!full;window.giftoFriends.refresh();}
+window.giftoFriendsOpenAll=()=>show(true);back.onclick=()=>show(false);
+document.addEventListener('click',e=>{
+ const link=e.target.closest('a');if(!link)return;e.preventDefault();
+ if(link.href.includes('friends.html')){show(true);return;}
+ const row=demoRows.find(r=>r.list_id===new URL(link.href).searchParams.get('list'));if(!row)return;
+ host.hidden=true;tabs.hidden=true;detail.hidden=false;back.hidden=false;detail.replaceChildren();
+ const title=document.createElement('h3');title.textContent=row.display_name+'의 '+row.title;
+ const note=document.createElement('p');note.textContent='실제 화면에서는 여기서 선물을 보고 참여할 수 있어요.';
+ const button=document.createElement('button');button.type='button';button.className='button button-ghost';
+ button.textContent=row.hidden?'숨긴 리스트 다시 표시':'리스트 숨기기';button.onclick=()=>{row.hidden=!row.hidden;show(host.hasAttribute('data-friends-full'));};
+ detail.append(title,note,button);
+});
+</script><script src="../js/friends.js"></script><script>window.giftoFriends.refresh();</script></body></html>

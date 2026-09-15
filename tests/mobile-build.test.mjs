@@ -104,3 +104,14 @@ test('public shared profiles use the restricted RPC, with a temporary migration 
   assert.match(migration, /drop policy if exists "profiles readable"/);
   assert.match(migration, /revoke insert, update, delete on public\.contributions/);
 });
+
+test('a claimed guest contribution connects the giver and recipient for friend wishlists', () => {
+  const app = read('js/app.js');
+  const migration = read('supabase/migrations/20260921_friend_wishlists.sql');
+  assert.match(app, /rpc\('my_friend_wishlists'\)/);
+  assert.match(app, /friend\.owner_id/);
+  assert.match(migration, /create table if not exists public\.friendships/);
+  assert.match(migration, /insert into public\.friendships/);
+  assert.match(migration, /create or replace function public\.my_friend_wishlists\(\)/);
+  assert.match(migration, /where auth\.uid\(\) in \(f\.member_a, f\.member_b\)/);
+});

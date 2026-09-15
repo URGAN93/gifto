@@ -146,18 +146,26 @@ async function setupHomeWishlistStatus() {
   const {data: auth} = await window.giftoDb.auth.getSession();
   if (!auth.session) { revealPrimaryAction(); return; }
   const cacheKey = 'gifto-home-wishlist-status';
-  const reveal = async products => {
+  const reveal = products => {
     products = sortWishlistProducts(products, false, true);
-    status.hidden = true;
 status.innerHTML = `<div class="home-wishlist-list">${products.map(product => { const percent = product.price ? Math.round((product.raised || 0) / product.price * 100) : 0; return `<a href="pages/participants.html?product=${encodeURIComponent(product.id)}&owner=${encodeURIComponent(auth.session.user.id)}&from=home" class="home-wishlist-card"><div class="home-wishlist-image" style="--image-bg:${escapeHtml(product.color || '#f2f7ff')}">${escapeHtml(product.emoji || '🎁')}${product.imageUrl ? `<img src="${escapeHtml(product.imageUrl)}" alt="${escapeHtml(product.name)}" />` : ''}</div><div><p>${escapeHtml(GIFT_CATEGORIES[product.category]?.label || '선물 리스트')}${product.status === 'closed' ? '<em class="home-proof-hint">인증 대기</em>' : ''}</p><strong>${escapeHtml(product.name)}</strong><span>${won(product.raised || 0)} 모임 · ${percent}% · ${product.supporters || 0}명 참여</span></div><b>›</b></a>`; }).join('')}</div>`;
-    const images = [...status.querySelectorAll('img')].filter(image => !image.complete);
-    if (images.length) await Promise.race([Promise.all(images.map(image => new Promise(resolve => { image.onload = resolve; image.onerror = resolve; }))), new Promise(resolve => setTimeout(resolve, 700))]);
     status.hidden = false;
     status.querySelectorAll('.home-wishlist-card').forEach(card => card.addEventListener('click', () => {
       sessionStorage.setItem('gifto-home-scroll-y', String(window.scrollY));
       sessionStorage.setItem('gifto-participants-from-home', '1');
     }));
   };
+  // Show only this signed-in account's recent snapshot while refreshing.
+  let showingCache = false;
+  try {
+    const cached = JSON.parse(localStorage.getItem(cacheKey));
+    if (cached?.ownerId === auth.session.user.id && Array.isArray(cached.products) && cached.products.length &&
+        Date.now() - cached.savedAt >= 0 && Date.now() - cached.savedAt < 86400000) {
+      reveal(cached.products);
+      showingCache = true;
+    }
+  } catch {}
+  revealPrimaryAction();
   let products = [];
   try {
     const {data: lists, error} = await window.giftoDb.from('wishlists').select('id').eq('owner_id', auth.session.user.id).order('created_at', {ascending:false});
@@ -165,6 +173,13 @@ status.innerHTML = `<div class="home-wishlist-list">${products.map(product => { 
     const wishlists = await Promise.all((lists || []).map(list => loadRemoteWishlist(auth.session.user.id, list.id)));
     products = wishlists.flatMap(remote => remote.products.map(product => ({...product, category:remote.wishlist.category})));
   } catch {
+    if (showingCache) {
+      const notice = document.createElement('p');
+      notice.className = 'field-help';
+      notice.textContent = '최근 저장된 목록이에요. 최신 내역을 불러오지 못했어요.';
+      status.append(notice);
+      return;
+    }
     localStorage.removeItem(cacheKey);
     status.hidden = false;
     status.textContent = '위시리스트를 불러오지 못했어요. 다시 로그인한 뒤 확인해 주세요.';
@@ -173,7 +188,7 @@ status.innerHTML = `<div class="home-wishlist-list">${products.map(product => { 
   }
   if (!products.length) { status.hidden = true; status.innerHTML = ''; localStorage.removeItem(cacheKey); revealPrimaryAction(); return; }
   await reveal(products);
-  try { localStorage.setItem(cacheKey, JSON.stringify({ownerId:auth.session.user.id, products})); } catch {}
+  try { localStorage.setItem(cacheKey, JSON.stringify({ownerId:auth.session.user.id, products, savedAt:Date.now()})); } catch {}
   const create = document.querySelector('[data-auth-destination="pages/create.html"]');
   if (create) { create.href = 'pages/create.html'; create.childNodes[0].nodeValue = '+ 위시리스트 추가하기 '; }
   revealPrimaryAction();
@@ -187,7 +202,16 @@ status.innerHTML = `<div class="home-wishlist-list">${products.map(product => { 
 async function setupContribution() {
   const selected = document.querySelector('[data-selected-product]');
   if (!selected) return;
-  const id = new URLSearchParams(location.search).get('product');
+  const params = new URLSearchParams(location.search);
+  const id = params.get('product');
+  const back = document.querySelector('.topbar .back');
+  const setBackLink = list => {
+    const query = new URLSearchParams();
+    if (ownerId) query.set('owner', ownerId);
+    if (list) query.set('list', list);
+    if (back) back.href = 'wishlist.html' + (query.toString() ? '?' + query.toString() : '');
+  };
+  setBackLink(params.get('list'));
   if (isUuid(ownerId)) {
     try {
       const remote = await loadRemoteWishlist(ownerId);
@@ -202,11 +226,18 @@ async function setupContribution() {
     selected.innerHTML = '<p class="empty-state">이 선물을 찾지 못했어요.</p>';
     return;
   }
+  setBackLink(product.wishlistId || params.get('list'));
   if (product.status && product.status !== 'open') {
     selected.innerHTML = '<p class="empty-state">이 선물은 마감되었거나 아직 공개 전이에요.</p>';
     return;
   }
-  selected.innerHTML = `<div class="product-image" style="--image-bg:${escapeHtml(product.color)}">${escapeHtml(product.emoji)}</div><div class="product-body"><h2 class="product-name">${escapeHtml(product.name)}</h2><span class="product-price">${won(product.price)} · ${Math.round(product.raised/product.price*100)}% 모였어요</span></div>`;
+  selected.innerHTML = `<div class="product-image${product.imageUrl ? ' contribution-photo' : ''}" style="--image-bg:${escapeHtml(product.color)}">${product.imageUrl ? `<img src="${escapeHtml(product.imageUrl)}" alt="${escapeHtml(product.name)}" />` : escapeHtml(product.emoji || '🎁')}</div><div class="product-body"><h2 class="product-name">${escapeHtml(product.name)}</h2><span class="product-price">${won(product.price)} · ${Math.round(product.raised/product.price*100)}% 모였어요</span></div>`;
+  const contributionPhoto = selected.querySelector('img');
+  if (contributionPhoto) contributionPhoto.onerror = () => {
+    const frame = contributionPhoto.parentElement;
+    frame.classList.remove('contribution-photo');
+    frame.textContent = product.emoji || '🎁';
+  };
   document.querySelector('[data-recipient-name]').textContent = `${activeProfile.name}에게 마음을 전해요`;
   const input = document.querySelector('#custom-amount');
   const customTrigger = document.querySelector('[data-custom-amount]');
@@ -228,9 +259,14 @@ async function setupContribution() {
     fallback.innerHTML = '<strong>목표 금액이 모였어요 🎉</strong><p>새 송금은 마감됐어요. 이미 시작한 송금은 복귀 화면에서 등록할 수 있어요.</p>';
   };
   const presets = [...document.querySelectorAll('[data-amount-presets] [data-amount]')];
+  let customSelected = selectedAmount > 0 && !presets.some(button => Number(button.dataset.amount) === selectedAmount);
+  if (customCard) customCard.hidden = !customSelected;
+  if (customSelected) input.value = selectedAmount.toLocaleString('ko-KR');
   const paint = () => {
+    customTrigger?.classList.toggle('is-selected', customSelected);
+    customTrigger?.setAttribute('aria-pressed', String(customSelected));
     presets.forEach(button => {
-      const selected = Number(button.dataset.amount) === selectedAmount;
+      const selected = !customSelected && Number(button.dataset.amount) === selectedAmount;
       button.classList.toggle('is-selected', selected);
       button.setAttribute('aria-pressed', String(selected));
     });
@@ -240,10 +276,16 @@ async function setupContribution() {
     sendButton.textContent = sendButton.disabled ? '금액을 선택해 주세요' : won(selectedAmount) + ' 보내기';
   };
   presets.forEach(button => button.addEventListener('click', () => {
-    selectedAmount = Number(button.dataset.amount); input.value = ''; paint();
+    customSelected = false;
+    selectedAmount = Number(button.dataset.amount); input.value = '';
+    if (customCard) customCard.hidden = true;
+    paint();
   }));
   customTrigger?.addEventListener('click', () => {
+    customSelected = true;
+    selectedAmount = Number(input.value.replace(/[^0-9]/g, ''));
     customCard.hidden = false;
+    paint();
     input.focus();
   });
   input.addEventListener('input', () => {
@@ -522,6 +564,15 @@ function setupQrGuideViewer() {
   });
   if (history.state?.giftoQrGuide) show();
 }
+function moveCompletedProfileSetting(section) {
+  const anchor = document.querySelector('.account-help');
+  if (!section || !anchor) return;
+  section.dataset.settingComplete = 'true';
+  for (const selector of ['.payment-settings', '[data-birthday-settings]']) {
+    const setting = document.querySelector(selector);
+    if (setting?.dataset.settingComplete === 'true') anchor.before(setting);
+  }
+}
 function setupPaymentSettings() {
   setupQrGuideViewer();
   const form = document.querySelector('[data-payment-settings]');
@@ -561,7 +612,7 @@ function setupPaymentSettings() {
   window.giftoDb.auth.getSession().then(async ({data}) => {
     if (!data.session) return;
     const {data: profile} = await window.giftoDb.from('profiles').select('kakao_pay_qr_url').eq('id', data.session.user.id).maybeSingle();
-    if (profile?.kakao_pay_qr_url) setConfigured(true);
+    if (profile?.kakao_pay_qr_url) { setConfigured(true); moveCompletedProfileSetting(section); }
   });
   const preview = document.createElement('img'); preview.className = 'payment-qr-preview'; preview.alt = '등록한 카카오페이 송금 QR';
   if (info.kakaoQr) { preview.src = info.kakaoQr; picker.insertAdjacentElement('afterend', preview); }
@@ -592,6 +643,7 @@ function setupPaymentSettings() {
       }
       savePaymentInfo(nextInfo);
       setConfigured(true);
+      moveCompletedProfileSetting(section);
       showToast('카카오페이 송금 설정을 저장했어요.');
     };
     const file = kakao.files[0];
@@ -616,6 +668,7 @@ async function setupBirthdaySettings() {
   if (!auth.session) { form.hidden = true; return; }
   const {data: profile} = await window.giftoDb.from('profiles').select('birth_date').eq('id', auth.session.user.id).single();
   if (profile?.birth_date) {
+    moveCompletedProfileSetting(form.closest('[data-birthday-settings]'));
     const [, savedMonth, savedDay] = profile.birth_date.split('-');
     form.hidden = true; locked.hidden = false; locked.textContent = `${Number(savedMonth)}월 ${Number(savedDay)}일 · 한 번 저장한 생일은 바꿀 수 없어요.`;
     return;
@@ -627,7 +680,8 @@ async function setupBirthdaySettings() {
     const birthDate = `2000-${String(month.value).padStart(2, '0')}-${String(day.value).padStart(2, '0')}`;
     const {error} = await window.giftoDb.from('profiles').update({birth_date:birthDate}).eq('id', auth.session.user.id).is('birth_date', null);
     if (error) { button.disabled = false; button.textContent = '생일 저장'; showToast('생일을 저장하지 못했어요.'); return; }
-    form.hidden = true; locked.hidden = false; locked.textContent = `${Number(month.value)}월 ${Number(day.value)}일 · 한 번 저장한 생일은 바꿀 수 없어요.`; showToast('생일을 저장했어요.');
+    form.hidden = true; locked.hidden = false; locked.textContent = `${Number(month.value)}월 ${Number(day.value)}일 · 한 번 저장한 생일은 바꿀 수 없어요.`;
+    moveCompletedProfileSetting(form.closest('[data-birthday-settings]')); showToast('생일을 저장했어요.');
   });
 }
 async function setupDisplayName() {
@@ -1391,25 +1445,35 @@ async function setupPublicProfile() {
   }
   document.querySelector('.wish-hero').nextElementSibling.querySelector('.count').textContent = (ownerId ? activeProfile.products : appData.products).length;
 }
-function setupFriendList() {
+async function setupFriendList() {
+  if (window.giftoFriends) return window.giftoFriends.refresh();
   const list = document.querySelector('[data-friend-list]');
   if (!list) return;
-  list.innerHTML = '';
-  const profiles = Object.entries(sharedProfiles);
-  if (!profiles.length) {
-    list.innerHTML = '<div class="empty-state">아직 공개된 친구 위시리스트가 없어요.</div>';
+  const empty = message => { list.innerHTML = '<div class="empty-state">' + escapeHtml(message) + '</div>'; };
+  if (!window.giftoDb) { empty('친구 위시리스트를 불러오지 못했어요.'); return; }
+  const {data: auth, error: authError} = await window.giftoDb.auth.getSession();
+  if (authError || !auth.session) { empty('로그인하면 함께한 친구의 위시리스트가 여기에 보여요.'); return; }
+  const {data: friends, error} = await window.giftoDb.rpc('my_friend_wishlists');
+  if (error) {
+    // The migration can be applied after this static PWA release. Avoid showing
+    // sample data or exposing profiles while the endpoint is unavailable.
+    empty(error.code === 'PGRST202' ? '친구 기능을 준비하고 있어요.' : '친구 위시리스트를 불러오지 못했어요.');
     return;
   }
-  profiles
-    .sort(([, first], [, second]) => Number(first.countdown.slice(2)) - Number(second.countdown.slice(2)))
-    .forEach(([id, profile]) => {
-      const isMine = id === 'seongmin';
-      const card = document.createElement('a'); card.className = 'birthday-card'; card.href = isMine ? 'pages/my-page.html' : 'pages/wishlist.html?owner=' + encodeURIComponent(id);
-      const avatar = document.createElement('div'); avatar.className = 'avatar ' + profile.avatar; avatar.textContent = profile.initial;
-      const details = document.createElement('div'); const name = document.createElement('strong'); const date = document.createElement('span');
-      name.textContent = isMine ? profile.name + ' (나)' : profile.name; date.textContent = isMine ? '내 위시리스트 관리하기' : profile.countdown + ' · ' + profile.eventDate; details.append(name, date);
-      const emoji = document.createElement('em'); emoji.textContent = profile.eventEmoji; card.append(avatar, details, emoji); list.append(card);
-    });
+  if (!friends?.length) { empty('아직 공개된 친구 위시리스트가 없어요.'); return; }
+  list.replaceChildren();
+  friends.forEach(friend => {
+    const card = document.createElement('a'); card.className = 'birthday-card';
+    card.href = 'pages/wishlist.html?owner=' + encodeURIComponent(friend.owner_id) + '&list=' + encodeURIComponent(friend.list_id) + '&from=friends';
+    const avatar = document.createElement('div'); avatar.className = 'avatar avatar-blue';
+    avatar.textContent = String(friend.display_name || '친구').trim().slice(0, 1) || '친';
+    const details = document.createElement('div'); const name = document.createElement('strong'); const title = document.createElement('span');
+    name.textContent = friend.display_name || 'GIFTO 친구';
+    title.textContent = friend.title || '공개 위시리스트';
+    details.append(name, title);
+    const emoji = document.createElement('em'); emoji.textContent = GIFT_CATEGORIES[friend.category]?.icon || '🎁';
+    card.append(avatar, details, emoji); list.append(card);
+  });
 }
 function setupWishlistCategory() {
   const picker = document.querySelector('[data-category-picker]');
